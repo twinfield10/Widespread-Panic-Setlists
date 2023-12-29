@@ -156,6 +156,7 @@ process_setlist <- function(setlist_link) {
           song_name %in% c('???', 'ARU/WSP JAM') ~ 'JAM',
           song_name == 'THIS MUST BE THE PLACE (NA<EF>VE MELODY)' ~ 'THIS MUST BE THE PLACE (NAIEVE MELODY)',
           song_name == 'W<CR>M' ~ 'WURM',
+          song_name %in% c('LAWYERS', 'GUNS', 'AND MONEY') ~ 'LAWYERS GUNS AND MONEY',
           TRUE ~ song_name
         ),
         venue_name = case_when(

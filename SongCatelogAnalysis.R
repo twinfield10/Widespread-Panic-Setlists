@@ -107,6 +107,18 @@ song_catalog %>%
   select(song_name, pct_shows_all_time, pct_shows_last_6_months, pct_shows_last_year, pct_shows_last_2_years, ltp, avg_ltp, ltp_diff, score) %>%
   print.data.frame()
 
+# Bust-Outs:
+song_catalog %>%
+  filter(ltp != 1 & ltp_diff > 1 & pct_shows_last_2_years < .10) %>%
+  mutate(
+    ltp_diff = if_else(ltp_diff == 0, 0.008, ltp_diff),
+    score = ((pct_shows_last_6_months * 24) + (pct_shows_last_year * 12) + (pct_shows_last_2_years * 6) + (pct_shows_all_time * 3))/ltp_diff
+  ) %>%
+  arrange(desc(score)) %>%
+  select(song_name, pct_shows_all_time, pct_shows_last_6_months, pct_shows_last_year, pct_shows_last_2_years, ltp, avg_ltp, ltp_diff, score) %>%
+  head(20) %>%
+  print.data.frame()
+
 # Task 2: Create a column for the song played before
 #prepro_data <- prepro_data %>%
 #  arrange(year, month, day, link, set, index) %>%

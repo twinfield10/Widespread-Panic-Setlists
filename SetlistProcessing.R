@@ -1,10 +1,14 @@
 library(tidyverse)
 library(rvest)
 library(lubridate)
+library(scales)
+library(xgboost)
 `%notin%` = Negate(`%in%`)
 
-## LOAD TOUR DATES AND VENUES ##
-load_tour_dates <- function(st_yr = 1985 , end_yr = 2023) {
+## DEFINE TWEAK FUNCTIONS ##
+
+# LOAD TOUR DATES AND VENUES
+load_tour_dates <- function(st_yr = 1985 , end_yr = 2024) {
   base_url <- 'http://everydaycompanion.com/'
   tour_list <- as.list(st_yr:end_yr)
   tour_list <- tour_list[tour_list != 2004] # :(
@@ -47,17 +51,68 @@ load_tour_dates <- function(st_yr = 1985 , end_yr = 2023) {
           (date == '09/00/88') & (venue == "O'Neilly's Pub, Macon, GA") ~ 'http://everydaycompanion.com/setlists/19880900a.asp',
           (date == '00/00/89') & (venue == "W.C. Don's, Jackson, MS") ~ 'http://everydaycompanion.com/setlists/19890000a.asp',
           (date == '01/00/89') & (venue == 'Phi Delta Theta House, University of Georgia, Athens, GA') ~ 'http://everydaycompanion.com/setlists/19890100a.asp',
-          (date == '04/00/89') & (venue == 'Sigma Alpha Epsilon House, Tuscaloosa, AL') ~ 'http://everydaycompanion.com/setlists/19890500a.asp',
+          (date == '04/00/89') & (venue == 'Sigma Alpha Epsilon House, Tuscaloosa, AL') ~ 'http://everydaycompanion.com/setlists/19890400b.asp',
           (date == '05/00/89') & (venue == 'The Brewery, Raleigh, NC') ~ 'http://everydaycompanion.com/setlists/19890500a.asp',
           (date == '09/00/89') & (venue == "Edgar's Campus Bar, Clemson University, Clemson, SC") ~ 'http://everydaycompanion.com/setlists/19890900a.asp',
           (date == '10/00/89') & (venue == 'Elmo House, Charlottesville, VA') ~ 'http://everydaycompanion.com/setlists/19891000a.asp',
           (date == '00/00/90') & (venue == "Johnny D's, Somerville, MA") ~ 'http://everydaycompanion.com/setlists/19900000a.asp',
           (date == '08/00/90') & (venue == 'Excelsior Mill, Atlanta, GA') ~ 'http://everydaycompanion.com/setlists/19900800a.asp',
           (date == '00/00/91') & (venue == 'Hollins University, Roanoke, VA') ~ 'NODATA',
+          (date == '03/21/87') & (venue == 'The Rookery, Macon, GA') ~ 'NODATA',
+          
+          # Multiple Shows in One Day (change Link To 'b')
+          (date == '07/21/91') & (venue == 'Sheridan Opera House, Telluride, CO') ~ 'http://everydaycompanion.com/setlists/19910721b.asp',
+          (date == '08/20/91') & (venue == "Toad's Place, New Haven, CT") ~ 'http://everydaycompanion.com/setlists/19910820b.asp',
+          (date == '09/21/92') & (venue == "Woodsmen of the World Hall, Eugene, OR") ~ 'http://everydaycompanion.com/setlists/19920921b.asp',
+          (date == '02/23/93') & (venue == "Newport Music Hall, Columbus, OH") ~ 'http://everydaycompanion.com/setlists/19930223b.asp',
+          (date == '05/03/93') & (venue == "First Avenue, Minneapolis, MN") ~ 'http://everydaycompanion.com/setlists/19930503b.asp',
+          (date == '05/12/93') & (venue == "Horizontal Boogie Bar, Rochester, NY") ~ 'http://everydaycompanion.com/setlists/19930512b.asp',
+          (date == '05/15/93') & (venue == "Avalon, Boston, MA") ~ 'http://everydaycompanion.com/setlists/19930515b.asp',
+          (date == '03/15/94') & (venue == "Avalon, Boston, MA") ~ 'http://everydaycompanion.com/setlists/19940315b.asp',
+          (date == '07/14/94') & (venue == "The Vic Theatre, Chicago, IL") ~ 'http://everydaycompanion.com/setlists/19940714b.asp',
+          (date == '11/05/94') & (venue == "Arnold Hall, US Air Force Academy, Colorado Springs, CO") ~ 'http://everydaycompanion.com/setlists/19941105b.asp',
+          (date == '11/06/94') & (venue == "Theater, Lory Student Center, Colorado State University, Fort Collins, CO") ~ 'http://everydaycompanion.com/setlists/19941106b.asp',
+          (date == '11/11/94') & (venue == "Roseland Theater, Portland, OR") ~ 'http://everydaycompanion.com/setlists/19941111b.asp',
+          (date == '03/25/95') & (venue == "Michigan State University Auditorium, East Lansing, MI") ~ 'http://everydaycompanion.com/setlists/19950325b.asp',
+          (date == '04/08/95') & (venue == "Irving Plaza, New York, NY") ~ 'http://everydaycompanion.com/setlists/19950408b.asp',
+          (date == '05/06/95') & (venue == "Chastain Park, Atlanta, GA") ~ 'http://everydaycompanion.com/setlists/19950506b.asp',
+          (date == '07/14/95') & (venue == "Cain's Main Street Stage, Tulsa, OK") ~ 'http://everydaycompanion.com/setlists/19950714b.asp',
+          (date == '07/18/95') & (venue == "Alberta Bair Theater, Billings, MT") ~ 'http://everydaycompanion.com/setlists/19950718b.asp',
+          (date == '07/22/95') & (venue == "Roseland Theater, Portland, OR") ~ 'http://everydaycompanion.com/setlists/19950722b.asp',
+          (date == '07/29/95') & (venue == "Snow King Center, Jackson, WY") ~ 'http://everydaycompanion.com/setlists/19950729b.asp',
+          (date == '04/12/97') & (venue == "Backyard, Bee Cave, TX") ~ 'http://everydaycompanion.com/setlists/19970412b.asp',
+          (date == '09/16/97') & (venue == "Virginia Theater, Champaign, IL") ~ 'http://everydaycompanion.com/setlists/19970916b.asp',
+          (date == '09/17/97') & (venue == "Shryock Auditorium, Southern Illinois University, Carbondale, IL") ~ 'http://everydaycompanion.com/setlists/19970917b.asp',
+          (date == '03/19/98') & (venue == "Chesterfield Café, Paris, FR") ~ 'http://everydaycompanion.com/setlists/19980319b.asp',
+          (date == '07/01/99') & (venue == "House of Blues, West Hollywood, CA") ~ 'http://everydaycompanion.com/setlists/19990701b.asp',
+          (date == '09/30/99') & (venue == "Backyard, Bee Cave, TX") ~ 'http://everydaycompanion.com/setlists/19990930b.asp',
+          (date == '11/17/99') & (venue == "Orpheum Theater, Boston, MA") ~ 'http://everydaycompanion.com/setlists/19991117b.asp',
+          (date == '07/30/00') & (venue == "Alpine Stage, Bolton Valley Resort, Bolton, VT") ~ 'http://everydaycompanion.com/setlists/20000730b.asp',
+          (date == '07/21/01') & (venue == "Harbor Center, Portsmouth, VA") ~ 'http://everydaycompanion.com/setlists/20010721b.asp',
+          (date == '10/16/01') & (venue == "Paramount Theater, Seattle, WA") ~ 'http://everydaycompanion.com/setlists/20011016b.asp',
+          (date == '10/24/01') & (venue == "KGSR 107.1FM Studios, Austin, TX") ~ 'http://everydaycompanion.com/setlists/20011024b.asp',
+          (date == '10/24/01') & (venue == "Frank Erwin Center, Austin, TX") ~ 'http://everydaycompanion.com/setlists/20011024c.asp',
+          (date == '11/01/01') & (venue == "Roy Wilkins Civic Auditorium, St. Paul, MN") ~ 'http://everydaycompanion.com/setlists/20011101b.asp',
+          (date == '11/08/01') & (venue == "Orpheum Theater, Boston, MA") ~ 'http://everydaycompanion.com/setlists/20011108b.asp',
+          (date == '04/11/03') & (venue == "UIC Pavilion, Chicago, IL") ~ 'http://everydaycompanion.com/setlists/20030411b.asp',
+          (date == '07/16/03') & (venue == "Harbor Center, Portsmouth, VA") ~ 'http://everydaycompanion.com/setlists/20030716b.asp',
+          (date == '07/22/03') & (venue == "Paolo Soleri, Santa Fe, NM") ~ 'http://everydaycompanion.com/setlists/20030722b.asp',
+          (date == '10/03/03') & (venue == "Backyard, Bee Cave, TX") ~ 'http://everydaycompanion.com/setlists/20031003b.asp',
+          (date == '04/08/05') & (venue == "Chicago Theatre, Chicago, IL") ~ 'http://everydaycompanion.com/setlists/20050408b.asp',
+          (date == '04/14/05') & (venue == "Radio City Music Hall, New York, NY") ~ 'http://everydaycompanion.com/setlists/20050414b.asp',
+          (date == '08/01/06') & (venue == "The Palace Theatre, Louisville, KY") ~ 'http://everydaycompanion.com/setlists/20060801b.asp',
+          (date == '11/02/06') & (venue == "Backyard, Bee Cave, TX") ~ 'http://everydaycompanion.com/setlists/20061102b.asp',
+          (date == '04/29/10') & (venue == "Howlin' Wolf, New Orleans, LA") ~ 'http://everydaycompanion.com/setlists/20100429b.asp',
+          (date == '06/24/10') & (venue == "Twist and Shout Records, Denver, CO") ~ 'http://everydaycompanion.com/setlists/20100624b.asp',
+          (date == '07/26/10') & (venue == "Tennessee Theater, Knoxville, TN") ~ 'http://everydaycompanion.com/setlists/20100726b.asp',
+          (date == '10/04/10') & (venue == "Ryman Auditorium, Nashville, TN") ~ 'http://everydaycompanion.com/setlists/20101004b.asp',
+          (date == '04/17/13') & (venue == "Palace Theater, Louisville, KY") ~ 'http://everydaycompanion.com/setlists/20130417b.asp',
+          (date == '01/25/19') & (venue == "Hard Rock Hotel and Casino, Riviera Maya, MX") ~ 'http://everydaycompanion.com/setlists/20190125b.asp',
           TRUE ~ link
         )
       ) %>%
       filter(link != 'NODATA') %>%
+      unique() %>%
       mutate(
         date_num = str_extract(link, "\\d+"),
         year = as.numeric(substr(date_num, 1, 4)),
@@ -88,19 +143,22 @@ load_tour_dates <- function(st_yr = 1985 , end_yr = 2023) {
   }
 
   # Combine DataFrames From Loop List
-  combined_tour_data <- bind_rows(tour_df_list) %>% arrange(year, month, day) %>% rowid_to_column('show_index')
+  tour_data <- bind_rows(tour_df_list) %>% arrange(year, month, day) %>% rowid_to_column('show_index')
+  
+  # Create Run Index
+  tour_data <- tour_data %>%
+    arrange(date, venue_name) %>%  # Sort data by 'venue' and 'date'
+    group_by(venue_name, run_index = cumsum(c(1, diff(date) != 1))) %>%  # Create groups based on consecutive dates and venue
+    ungroup() %>%
+    select(link, date, date_num, year, month, day, state, city, venue_name, venue_full, run_index, show_index, year_index, venue)
+  
+  print(tour_data %>% head())
   
   # Return Final DataFrame
-  return(combined_tour_data)
+  return(tour_data)
 }
-
-# Create "Schedule" Table
-combined_tour_data <- load_tour_dates()
-
-
-## CREATE SETLIST DF ##
-
-# Build Function For Looping Over Setlists
+tour_df <- load_tour_dates()
+# PROCESS SETLISTS FROM LINK LOAD
 process_setlist <- function(setlist_link) {
   
   tryCatch({
@@ -110,7 +168,7 @@ process_setlist <- function(setlist_link) {
     setlist_raw <- setlist_tbl[[6]] %>%
       mutate(
         X1 = str_replace_all(X1, "ï", "i")
-        ) %>%
+      ) %>%
       mutate(
         set = case_when(
           substr(X1, 1, 3) == "??" ~ 'Details',
@@ -120,6 +178,9 @@ process_setlist <- function(setlist_link) {
           substr(X1, 1, 3) == "3: " ~ '3',
           substr(X1, 1, 3) == "4: " ~ '4',
           substr(X1, 1, 3) == "E: " ~ 'E',
+          substr(X1, 1, 3) == "E1:" ~ 'E',
+          substr(X1, 1, 3) == "E2:" ~ 'E',
+          substr(X1, 1, 3) == "E3:" ~ 'E',
           grepl("^\\d{2}/", substr(X1, 1, 3)) ~ "Details",
           TRUE ~ "Notes"
         )
@@ -127,11 +188,11 @@ process_setlist <- function(setlist_link) {
       rename("Raw" = 'X1') %>%
       mutate(
         Raw = case_when(
-        set %in% c('0', '1', '2', '3', '4', 'E') ~ str_replace(Raw, "^.{3}", ""),
-        TRUE ~ Raw
-      )
+          set %in% c('0', '1', '2', '3', '4', 'E') ~ str_replace(Raw, "^.{3}", ""),
+          TRUE ~ Raw
+        )
       ) 
-  
+    
     songs <- setlist_raw %>%
       filter(set %notin% c('Details', 'Notes')) %>%
       separate_rows(Raw, sep = ",") %>%
@@ -141,16 +202,19 @@ process_setlist <- function(setlist_link) {
         song_name = toupper(trimws(Raw)),
         notes_id = str_count(song_name, "\\*"),
         song_notes_key = if_else(notes_id == 0, "", strrep("*", times = notes_id)),
-        ) %>%
+      ) %>%
       rowid_to_column('song_index') %>%
       select('set', 'song_name', 'into', 'song_index', 'song_notes_key', 'notes_id')
-  
+    
+    # Tour Library
+    join_df <- tour_df %>% filter(link == setlist_link)
+    
     # Mutate
     songs <- mutate(songs, link = setlist_link) %>%
-      left_join(combined_tour_data, by = 'link') %>%
+      left_join(join_df, by = 'link') %>%
       mutate(
         song_name = toupper(str_replace_all(song_name, "\\*", ""))
-        ) %>%
+      ) %>%
       mutate(
         song_name = case_when(
           song_name %in% c('???', 'ARU/WSP JAM') ~ 'JAM',
@@ -179,32 +243,32 @@ process_setlist <- function(setlist_link) {
           TRUE ~ city
         )
       ) %>%
-      select(date, year, month, day, state, city, venue_name, set, song_name, into, show_index, year_index, song_index, song_notes_key, link, venue_full, notes_id)
+      select(date, year, month, day, state, city, venue_name, set, song_name, into, run_index, show_index, year_index, song_index, song_notes_key, link, venue_full, notes_id)
     
     is_notes <- sum(songs$notes_id)
     
     # Create Notes DataFrame
     if (is_notes > 0){
-    notes_str <- setlist_raw %>%
-      filter(set %in% c('Notes')) %>%
-      select(Raw) %>%
-      pull()
-    
-    notes_split <- strsplit(notes_str, "(?<=[A-Za-z])\\*", perl = TRUE)[[1]]
-    for (n in seq_along(notes_split)) {
-      if (n == 1) {
-        notes_split[n] <- notes_split[n]
-      } else if (n > 1) {
-        notes_split[n] <- paste0("*", notes_split[n])
+      notes_str <- setlist_raw %>%
+        filter(set %in% c('Notes')) %>%
+        select(Raw) %>%
+        pull()
+      
+      notessplit <- strsplit(notes_str, "(?<=[A-Za-z])\\*", perl = TRUE)[[1]]
+      for (n in seq_along(notessplit)) {
+        if (n == 1) {
+          notessplit[n] <- notessplit[n]
+        } else if (n > 1) {
+          notessplit[n] <- paste0("*", notessplit[n])
+        }
       }
-    }
-
-    notes_df <- tibble('strings' = notes_split) %>%
-      separate(strings, into = c("song_notes_key", "song_note_detail"), sep = " ", extra = "merge") %>%
-      mutate(
-        song_notes_key = trimws(song_notes_key),
-        song_note_detail = toupper(trimws(song_note_detail))
-      )
+      
+      notes_df <- tibble('strings' = notessplit) %>%
+        separate(strings, into = c("song_notes_key", "song_note_detail"), sep = " ", extra = "merge") %>%
+        mutate(
+          song_notes_key = trimws(song_notes_key),
+          song_note_detail = toupper(trimws(song_note_detail))
+        )
     }
     else{
       notes_df <- tibble() %>%
@@ -218,8 +282,8 @@ process_setlist <- function(setlist_link) {
     songs <- songs %>%
       left_join(notes_df, by = c("song_notes_key")) %>%
       select(-c(song_notes_key, notes_id))
-      
-
+    
+    
     return(songs)
   }, error = function(e) {
     
@@ -236,27 +300,54 @@ process_setlist <- function(setlist_link) {
           into = NA,
           song_notes_key = NA
         ) %>%
-        select(date, year, month, day, state, city, venue_name, set, song_name, into, show_index, year_index, song_index, song_notes_key, link, venue_full)
+        select(date, year, month, day, state, city, venue_name, run_index, set, song_name, into, run_index, show_index, year_index, song_index, song_notes_key, link, venue_full)
     }, error = function(e){
       # Print the error message along with setlist_link causing the error
       cat("Error processing tour data in setlist_link:", setlist_link, "\n")
       cat("Error message:", conditionMessage(e), "\n")
       # Return a data frame with NAs to indicate the error
-      return(data.frame(date = NA, year = NA, month = NA, day = NA, state = NA, city = NA, venue_name = NA, set = NA, song_name = NA, into = NA, show_index = NA, year_index = NA, song_index = NA, link = NA, venue_full = NA))
+      return(data.frame(date = NA, year = NA, month = NA, day = NA, state = NA, city = NA, venue_name = NA, set = NA, song_name = NA, into = NA, run_index = NA, show_index = NA, year_index = NA, song_index = NA, link = NA, venue_full = NA))
     })
   })
 }
 
-# Process each setlist link and combine the results
-start_time <- Sys.time()
-full_data <- map_dfr(combined_tour_data$link, process_setlist)
-rm(tour_df_list)
-end_time <- Sys.time()
-elapsed_time <- as.numeric(difftime(end_time, start_time, units = "mins"))
-print(paste0('Successfully Loaded ',length(unique(full_data$link)),' Widespread Panic Shows (', nrow(full_data),' Total Rows/Songs) in ', round(elapsed_time, 2),' Minutes From ', min(full_data$year), ' to ', max(full_data$year)))
-print(full_data %>% head())
+## DEFINE LOAD/UPDATE FUNCTIONS ##
+load_all_setlists <- function(st_yr = 1985 , end_yr = 2024){
+  start_time <- Sys.time()
+  
+  # Download Calendar Using Links
+  data <- map_dfr(tour_df$link, process_setlist)
+  
+  end_time <- Sys.time()
+  elapsed_time <- as.numeric(difftime(end_time, start_time, units = "mins"))
+  print(paste0('Successfully Loaded ',length(unique(data$link)),' Widespread Panic Shows (', nrow(data),' Total Rows/Songs) in ', round(elapsed_time, 2),' Minutes From ', min(data$year), ' to ', max(data$year)))
+  print(data %>% head())
+  
+  # Save
+  ## SAVE FILE FOR MODEL AND ANALYSIS
+  saveRDS(data, file = paste0("Raw_WSP_Setlists_",st_yr,"_",end_yr,".rds"))
+  write_csv(data, file = paste0("Raw_WSP_Setlists_",st_yr,"_",end_yr,".csv"))
+  
+  # Return
+  return(data)
+}
+update_setlist <- function(yr = 2024){
+  exist_df <- readRDS("Raw_WSP_Setlists_1985_2024.rds") %>% filter(year <= (2023))
+  
+  new_shows <- load_tour_dates(st_yr = yr, end_yr = yr)
+  
+  new_df <- map_dfr(new_shows$link, process_setlist, new_shows)
+  
+  final_df <- rbind(exist_df, new_df) %>% unique() %>% arrange(year, month, day, set, song_index)
+  
+  saveRDS(full_data, file = "Raw_WSP_Setlists_1985_2024.rds")
+  write_csv(full_data, file = "Raw_WSP_Setlists_1985_2024.csv")
+  
+  return(final_df)
+}
+
+full_data <- load_all_setlists()
 
 
-## SAVE FILE FOR MODEL AND ANALYSIS
-saveRDS(full_data, file = "Raw_WSP_Setlists_1985_2023.rds")
-write_csv(full_data, file = "Raw_WSP_Setlists_1985_2023.csv")
+
+

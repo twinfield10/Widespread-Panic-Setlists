@@ -1,4 +1,4 @@
-# Load File
+### LOAD AND PREPROCESS DATA FOR MODEL ###
 model_data <- readRDS("Raw_WSP_Setlists_1985_2024.rds") %>%
   mutate(
     set_num = case_when(
@@ -16,87 +16,109 @@ model_data <- readRDS("Raw_WSP_Setlists_1985_2024.rds") %>%
   ) %>%
   select(-c(min_set, max_set, set_num)) %>%
   filter(!is.na(run_index)) %>%
-  ungroup()
+  ungroup() %>%
+  group_by(run_index) %>%
+  mutate(show_in_run  = (show_index -min(show_index))+1) %>%
+  ungroup() %>%
+  filter(date != '2023-01-13')
 
-### PREPROCESS DATA FOR MODEL ###
 
-# Task 1: Build LTP Input and Columns
-
-# Train Manipulate Function #
-manipulate_train <- function(test_date, test_city){
+# Task 1: Build Tweak Function (Takes Setlist And Pre-Processes Data Into Usable Model Input)
+manipulate_train <- function(test_date = future_shows$date[[1]]){
+  
+  # Create Show-Specific Variables
+  if(test_date > max(model_data$date)){
+    future_show_df <- future_shows %>% filter(date == test_date)
+    
+    test_state <- future_show_df$state[[1]]
+    test_city <- future_show_df$city[[1]]
+    test_venue <- future_show_df$venue_full[[1]]
+    test_show_in_run <- future_show_df$show_in_run[[1]]
+  } else {
+    old_show_row <- model_data %>% filter(date == test_date)
+    
+    test_state <- model_data$state[[1]]
+    test_city <- old_show_row$city[[1]]
+    test_venue <- old_show_row$venue_full[[1]]
+    test_show_in_run <- old_show_row$show_in_run[[1]]
+  }
   
   next_show_day = weekdays(as.Date(test_date))
+  
   
   df <- model_data %>%
     filter(date < test_date) %>%
     filter(song_name %notin% c('','DRUMS', 'JAM')) %>%
-    arrange(run_index ,show_index, year_index, song_index)
+    arrange(run_index, show_index, year_index, song_index)
   
-  # Shows
+  # Next Show + Run
+  next_show_index = max(df$show_index) + 1
+  next_run_index = ifelse(max(df$date) != as.Date(test_date) - 1, max(df$run_index) + 1, max(df$run_index))
+  
+  ## BY SHOW
   tot_shows <- n_distinct(df$link)
   tot_shows_last_6_months <- n_distinct(df %>% filter(difftime(test_date, date, units = "days") <= (365/2)) %>% select(link) %>% distinct())
   tot_shows_last_year <- n_distinct(df %>% filter(difftime(test_date, date, units = "days") <= (365)) %>% select(link) %>% distinct())
   tot_shows_last_2_years <- n_distinct(df %>% filter(difftime(test_date, date, units = "days") <= (365*2)) %>% select(link) %>% distinct())
   tot_shows_last_4_years <- n_distinct(df %>% filter(difftime(test_date, date, units = "days") <= (365*4)) %>% select(link) %>% distinct())
   tot_shows_last_10_years <- n_distinct(df %>% filter(difftime(test_date, date, units = "days") <= (365*10)) %>% select(link) %>% distinct())
+  
   tot_shows_mikey_years <- n_distinct(df %>% filter(date <= "2002-08-10") %>% select(link) %>% distinct())
   tot_shows_jimmy_years <- n_distinct(df %>% filter(date >= "2006-08-03") %>% select(link) %>% distinct())
+  
+  # Location
+  tot_shows_same_state <- n_distinct(df %>% filter(state == test_state) %>% select(link) %>% distinct())
   tot_shows_same_city <- n_distinct(df %>% filter(city == test_city) %>% select(link) %>% distinct())
+  tot_shows_same_venue <- n_distinct(df %>% filter(venue_full == test_venue) %>% select(link) %>% distinct())
   
-  #Day of Week
+  # Day of Week
   tot_shows_same_day <- n_distinct(df %>% filter(weekday == next_show_day) %>% select(link) %>% distinct())
-  tot_shows_monday <- n_distinct(df %>% filter(weekday == 'Monday') %>% select(link) %>% distinct())
-  tot_shows_tuesday <- n_distinct(df %>% filter(weekday == 'Tuesday') %>% select(link) %>% distinct())
-  tot_shows_wednesday <- n_distinct(df %>% filter(weekday == 'Wednesday') %>% select(link) %>% distinct())
-  tot_shows_thursday <- n_distinct(df %>% filter(weekday == 'Thursday') %>% select(link) %>% distinct())
-  tot_shows_friday <- n_distinct(df %>% filter(weekday == 'Friday') %>% select(link) %>% distinct())
-  tot_shows_saturday <- n_distinct(df %>% filter(weekday == 'Saturday') %>% select(link) %>% distinct())
-  tot_shows_sunday <- n_distinct(df %>% filter(weekday == 'Sunday') %>% select(link) %>% distinct())
   
-  # Runs
+  ## BY RUNS
   tot_runs <- max(df$run_index)
   tot_runs_last_6_months <- n_distinct(df %>% filter(difftime(test_date, date, units = "days") <= (365/2)) %>% select(run_index) %>% distinct())
   tot_runs_last_year <- n_distinct(df %>% filter(difftime(test_date, date, units = "days") <= (365)) %>% select(run_index) %>% distinct())
   tot_runs_last_2_years <- n_distinct(df %>% filter(difftime(test_date, date, units = "days") <= (365*2)) %>% select(run_index) %>% distinct())
   tot_runs_last_4_years <- n_distinct(df %>% filter(difftime(test_date, date, units = "days") <= (365*4)) %>% select(run_index) %>% distinct())
   tot_runs_last_10_years <- n_distinct(df %>% filter(difftime(test_date, date, units = "days") <= (365*10)) %>% select(run_index) %>% distinct())
+  
+  # Location
+  tot_runs_same_state <- n_distinct(df %>% filter(state == test_state) %>% select(run_index) %>% distinct())
   tot_runs_same_city <- n_distinct(df %>% filter(city == test_city) %>% select(run_index) %>% distinct())
+  tot_runs_same_venue <- n_distinct(df %>% filter(venue_full == test_venue) %>% select(run_index) %>% distinct())
   
-  # Next Show + Run
-  next_show_index = max(df$show_index) + 1
-  next_run_index = max(df$run_index) + 1
-  
+  # Show In Run
+  tot_shows_same_in_run <- n_distinct(df %>% filter(show_in_run == test_show_in_run) %>% select(link) %>% distinct())
+  tot_shows_same_day_in_run <- n_distinct(df %>% filter(weekday == next_show_day & show_in_run == test_show_in_run) %>% select(link) %>% distinct())
   
   # Song Statistics
   clean_train <- df %>%
     mutate(
+      # Last X Years
       is_last_6_months = ifelse(!is.na(date) & difftime(test_date, date, units = "days") <= (365/2) , 1, 0),
       is_last_year = ifelse(!is.na(date) & difftime(test_date, date, units = "days") <= 365 , 1, 0),
       is_last_2_years = ifelse(!is.na(date) & difftime(test_date, date, units = "days") <= 365*2 , 1, 0),
       is_last_4_years = ifelse(!is.na(date) & difftime(test_date, date, units = "days") <= 365*4 , 1, 0),
       is_last_10_years = ifelse(!is.na(date) & difftime(test_date, date, units = "days") <= 365*10 , 1, 0),
+      
+      # By Guitarist
       is_mikey_show = ifelse(date <= "2002-08-10", 1, 0),
-      is_jimmy_show = ifelse(date <= "2006-08-03", 1, 0),
+      is_jimmy_show = ifelse(date >= "2006-08-03", 1, 0),
+      
+      # By Location
+      is_same_state = ifelse(city == test_state, 1, 0),
       is_same_city = ifelse(city == test_city, 1, 0),
+      is_same_venue = ifelse(venue_full == test_venue, 1, 0),
       
+      # By Day Type 
       is_same_day = ifelse(weekday == next_show_day, 1, 0),
-      is_monday = ifelse(weekday == 'Monday', 1, 0),
-      is_tuesday = ifelse(weekday == 'Tuesday', 1, 0),
-      is_wednesday = ifelse(weekday == 'Wednesday', 1, 0),
-      is_thursday = ifelse(weekday == 'Thursday', 1, 0),
-      is_friday = ifelse(weekday == 'Friday', 1, 0),
-      is_saturday = ifelse(weekday == 'Saturday', 1, 0),
-      is_sunday = ifelse(weekday == 'Sunday', 1, 0),
-      
-      run_is_last_6_months = ifelse(!is.na(date) & difftime(test_date, date, units = "days") <= (365/2) , 1, 0),
-      run_is_last_year = ifelse(!is.na(date) & difftime(test_date, date, units = "days") <= 365 , 1, 0),
-      run_is_last_2_years = ifelse(!is.na(date) & difftime(test_date, date, units = "days") <= 365*2 , 1, 0),
-      run_is_last_4_years = ifelse(!is.na(date) & difftime(test_date, date, units = "days") <= 365*4 , 1, 0),
-      run_is_last_10_years = ifelse(!is.na(date) & difftime(test_date, date, units = "days") <= 365*10 , 1, 0),
-      run_is_same_city = ifelse(city == test_city, 1, 0)
-    ) %>%
+      is_same_in_run = ifelse(show_in_run == test_show_in_run, 1, 0),
+      is_same_day_in_run = is_same_day*is_same_in_run
+      ) %>%
     group_by(song_name) %>%
     mutate(
+      # LTP BY SHOW
+      
       ltp =   next_show_index - max(show_index),
       ltp_2 = next_show_index - nth(sort(unique(show_index), decreasing = TRUE), 2), 
       ltp_3 = next_show_index - nth(sort(unique(show_index), decreasing = TRUE), 3),
@@ -107,7 +129,9 @@ manipulate_train <- function(test_date, test_city){
       ltp_8 = next_show_index - nth(sort(unique(show_index), decreasing = TRUE), 8),
       ltp_9 = next_show_index - nth(sort(unique(show_index), decreasing = TRUE), 9),
       ltp_10= next_show_index - nth(sort(unique(show_index), decreasing = TRUE), 10),
-  
+    
+      # LTP BY RUN
+      
       ltp_run =   next_run_index - max(run_index),
       ltp_2_run = next_run_index - nth(sort(unique(run_index), decreasing = TRUE), 2),
       ltp_3_run = next_run_index - nth(sort(unique(run_index), decreasing = TRUE), 3),
@@ -120,67 +144,126 @@ manipulate_train <- function(test_date, test_city){
       ltp_10_run =next_run_index - nth(sort(unique(run_index), decreasing = TRUE), 10)
     )  %>%
     summarise(
+      ### TOTAL COUNTS ###
+      
+      ## SHOWS
+      
+      # Time
       n_shows_all_time = n_distinct(link),
       n_shows_last_6_months = sum(is_last_6_months),
       n_shows_last_year = sum(is_last_year),
       n_shows_last_2_years = sum(is_last_2_years),
       n_shows_last_4_years = sum(is_last_4_years),
       n_shows_last_10_years = sum(is_last_10_years),
+      
+      # Guitarist
       n_shows_mikey_years = sum(is_mikey_show),
       n_shows_jimmy_years = sum(is_jimmy_show),
+      
+      # Location
+      n_shows_same_state = sum(is_same_state),
       n_shows_same_city = sum(is_same_city),
+      n_shows_same_venue = sum(is_same_venue),
       
+      # Day
       n_shows_same_day = sum(is_same_day),
-      n_shows_monday = sum(is_monday),
-      n_shows_tuesday = sum(is_tuesday),
-      n_shows_wednesday = sum(is_wednesday),
-      n_shows_thursday = sum(is_thursday),
-      n_shows_friday = sum(is_friday),
-      n_shows_saturday = sum(is_saturday),
-      n_shows_sunday = sum(is_sunday),
+      n_shows_same_in_run = sum(is_same_in_run),
+      n_shows_same_day_in_run = sum(is_same_day_in_run),
+
+      ## RUNS
       
+      # Time
       n_runs_all_time = n_distinct(run_index),
       n_runs_last_6_months = (n_distinct(run_index * is_last_6_months))-1,
       n_runs_last_year = (n_distinct(run_index * is_last_year))-1,
       n_runs_last_2_years = (n_distinct(run_index * is_last_2_years))-1,
       n_runs_last_4_years = (n_distinct(run_index * is_last_4_years))-1,
       n_runs_last_10_years = (n_distinct(run_index * is_last_10_years))-1,
+      
+      # Location
+      n_runs_same_state = (n_distinct(run_index * is_same_state))-1,
       n_runs_same_city = (n_distinct(run_index * is_same_city))-1,
-
+      n_runs_same_venue = (n_distinct(run_index * is_same_venue))-1,
+      
+      ### PERCENT OF WHOLE ###
+      
+      ## SHOWS
+      
+      # Time
       pct_shows_all_time = n_shows_all_time / tot_shows,
       pct_shows_last_6_months = n_shows_last_6_months / tot_shows_last_6_months,
       pct_shows_last_year = n_shows_last_year / tot_shows_last_year,
       pct_shows_last_2_years = n_shows_last_2_years / tot_shows_last_2_years,
       pct_shows_last_4_years = n_shows_last_4_years / tot_shows_last_4_years,
       pct_shows_last_10_years = n_shows_last_10_years / tot_shows_last_10_years,
+      
+      # Guitarist
       pct_shows_mikey_years = n_shows_mikey_years / tot_shows_mikey_years,
       pct_shows_jimmy_years = n_shows_jimmy_years / tot_shows_jimmy_years,
+      
+      # Location
+      pct_shows_same_state = n_shows_same_state / tot_shows_same_state,
       pct_shows_same_city = n_shows_same_city / tot_shows_same_city,
+      pct_shows_same_venue = n_shows_same_venue / tot_shows_same_venue,
       
+      # Day
       pct_shows_same_day = n_shows_same_day / tot_shows_same_day,
-      pct_shows_monday = n_shows_monday / tot_shows_monday,
-      pct_shows_tuesday = n_shows_tuesday / tot_shows_tuesday,
-      pct_shows_wednesday = n_shows_wednesday / tot_shows_wednesday,
-      pct_shows_thursday = n_shows_thursday / tot_shows_thursday,
-      pct_shows_friday = n_shows_friday / tot_shows_friday,
-      pct_shows_saturday = n_shows_saturday / tot_shows_saturday,
-      pct_shows_sunday = n_shows_sunday / tot_shows_sunday,
+      pct_shows_same_in_run = n_shows_same_in_run / tot_shows_same_in_run,
+      pct_shows_same_day_in_run = n_shows_same_day_in_run / tot_shows_same_day_in_run,
       
+      ## RUNS ##
+      
+      # Time
       pct_runs_all_time = n_runs_all_time / tot_runs,
       pct_runs_last_6_months = n_runs_last_6_months / tot_runs_last_6_months,
       pct_runs_last_year = n_runs_last_year / tot_runs_last_year,
       pct_runs_last_2_years = n_runs_last_2_years / tot_runs_last_2_years,
       pct_runs_last_4_years = n_runs_last_4_years / tot_runs_last_4_years,
       pct_runs_last_10_years = n_runs_last_10_years / tot_runs_last_10_years,
+      
+      # Location
+      pct_runs_same_state = n_runs_same_state / tot_runs_same_state,
       pct_runs_same_city = n_runs_same_city / tot_runs_same_city,
+      pct_runs_same_venue = n_runs_same_venue / tot_runs_same_venue,
       
+      ### DIFFERENCES IN PERCENT ###
+      
+      ## Shows
+      
+      # Time (Arbitrary)
+      diff_6mo_2year = pct_shows_last_6_months - pct_shows_last_2_years,
+      diff_year_alltime = pct_shows_last_year - pct_shows_all_time,
+      diff_2year_10year = pct_shows_last_2_years - pct_shows_last_10_years,
+      
+      # Guitarist
+      diff_jimmy_mikey_shows = pct_shows_jimmy_years - pct_shows_mikey_years,
+      
+      # Location
+      diff_shows_same_state = pct_shows_same_state - pct_shows_all_time,
       diff_shows_same_city = pct_shows_same_city - pct_shows_all_time,
+      diff_shows_same_venue = pct_shows_same_venue - pct_shows_all_time,
+      diff_recent_shows_same_state = pct_shows_same_state - pct_shows_last_10_years,
+      diff_recent_shows_same_city = pct_shows_same_city - pct_shows_last_10_years,
+      diff_recent_shows_same_venue = pct_shows_same_venue - pct_shows_last_10_years,
+      
+      diff_runs_same_state = pct_runs_same_state - pct_runs_all_time,
       diff_runs_same_city = pct_runs_same_city - pct_runs_all_time,
+      diff_runs_same_venue = pct_runs_same_venue - pct_runs_all_time,
+      diff_recent_shows_same_state = pct_runs_same_state - pct_runs_last_10_years,
+      diff_recent_shows_same_city = pct_runs_same_city - pct_runs_last_10_years,
+      diff_recent_shows_same_venue = pct_runs_same_venue - pct_runs_last_10_years,
       
+      # Day
       diff_shows_same_day = pct_shows_same_day - pct_shows_all_time,
+      diff_recent_shows_same_day = pct_shows_same_day - pct_shows_last_10_years,
+      diff_shows_same_in_run = pct_shows_same_in_run - pct_shows_all_time,
+      diff_recent_shows_same_in_run = pct_shows_same_in_run - pct_shows_last_10_years,
+      diff_shows_same_day_in_run = pct_shows_same_day_in_run - pct_shows_all_time,
+      diff_recent_shows_same_day_in_run = pct_shows_same_day_in_run - pct_shows_last_10_years,
       
-      off_shelf = if_else(n_shows_last_4_years > 4 & n_shows_all_time > 10, TRUE, FALSE),
+      ### NORMALIZE LTP###
       
+      # By Show
       ltp =   max(ltp),
       ltp_2 = max(ltp_2),
       ltp_3 = max(ltp_3),
@@ -192,6 +275,7 @@ manipulate_train <- function(test_date, test_city){
       ltp_9 = max(ltp_9),
       ltp_10= max(ltp_10),
       
+      # By Run
       ltp_run =   max(ltp_run),
       ltp_2_run = max(ltp_2_run),
       ltp_3_run = max(ltp_3_run),
@@ -205,14 +289,16 @@ manipulate_train <- function(test_date, test_city){
     ) %>%
     ungroup() %>%
     mutate(
-        eligible = if_else(rowSums(!is.na(select(., starts_with("ltp_")))) >= 9, 1, 0)
+      eligible = if_else(rowSums(!is.na(select(., starts_with("ltp_")))) >= 9, 1, 0)
     )
   
   eligible_songs <- clean_train %>%
     filter(eligible == 1) %>%
     group_by(song_name) %>%
     mutate(
+      
       # LTP (Show) Differences
+      
       diff_ltp_1_2 = ltp_2 - ltp,
       diff_ltp_2_3 = ltp_3 - ltp_2,
       diff_ltp_3_4 = ltp_4 - ltp_3,
@@ -223,19 +309,29 @@ manipulate_train <- function(test_date, test_city){
       diff_ltp_8_9 = ltp_9 - ltp_8,
       diff_ltp_9_10 = ltp_10 - ltp_9,
       avg_ltp = sum(ltp, diff_ltp_1_2, diff_ltp_2_3, diff_ltp_3_4,
-                        diff_ltp_4_5, diff_ltp_5_6, diff_ltp_6_7,
-                        diff_ltp_7_8, diff_ltp_8_9, diff_ltp_9_10, na.rm = TRUE)/sum(!is.na(ltp), !is.na(diff_ltp_1_2), !is.na(diff_ltp_2_3), !is.na(diff_ltp_3_4),
-                                                                                                 !is.na(diff_ltp_4_5), !is.na(diff_ltp_5_6), !is.na(diff_ltp_6_7), 
-                                                                                                 !is.na(diff_ltp_7_8), !is.na(diff_ltp_8_9), !is.na(diff_ltp_9_10)),
+                    diff_ltp_4_5, diff_ltp_5_6, diff_ltp_6_7,
+                    diff_ltp_7_8, diff_ltp_8_9, diff_ltp_9_10, na.rm = TRUE)/sum(!is.na(ltp), !is.na(diff_ltp_1_2), !is.na(diff_ltp_2_3), !is.na(diff_ltp_3_4),
+                                                                                 !is.na(diff_ltp_4_5), !is.na(diff_ltp_5_6), !is.na(diff_ltp_6_7), 
+                                                                                 !is.na(diff_ltp_7_8), !is.na(diff_ltp_8_9), !is.na(diff_ltp_9_10)),
       recent_avg_ltp = sum(ltp, diff_ltp_1_2, diff_ltp_2_3, diff_ltp_3_4, diff_ltp_4_5, diff_ltp_5_6,
-                               na.rm = TRUE)/sum(!is.na(ltp), !is.na(diff_ltp_1_2), !is.na(diff_ltp_2_3), !is.na(diff_ltp_3_4),
-                                                 !is.na(diff_ltp_4_5), !is.na(diff_ltp_5_6)),
+                           na.rm = TRUE)/sum(!is.na(ltp), !is.na(diff_ltp_1_2), !is.na(diff_ltp_2_3), !is.na(diff_ltp_3_4),
+                                             !is.na(diff_ltp_4_5), !is.na(diff_ltp_5_6)),
+      # LTP Metrics
       ltp_diff =  abs(ltp - avg_ltp),
-      ltp_diff = if_else(ltp - avg_ltp > 0, ltp_diff, if_else(ltp - avg_ltp < 0, ltp_diff, 0.008)),
+      ltp_diff = if_else(ltp - avg_ltp > 0, ltp_diff, if_else(ltp - avg_ltp < 0, ltp_diff, 0.01)),
+      ltp_ratio = ltp_diff / avg_ltp,
+      
+      # Recent LTP Metrics
+      recent_ltp_diff = abs(ltp - recent_avg_ltp),
+      recent_ltp_diff = if_else(ltp - avg_ltp > 0, recent_ltp_diff, if_else(ltp - avg_ltp < 0, recent_ltp_diff, 0.01)),
+      recent_ltp_ratio = recent_ltp_diff / recent_avg_ltp,
+      
+      # Other LTP Metrics
       played_last_show = if_else(ltp == 1, 1, 0),
       overdue_show = if_else(ltp - avg_ltp > 0, ltp_diff, 0),
+      overdue_metric = if_else(ltp - avg_ltp > 0, ltp_diff*pct_runs_last_year, 0),
       
-      # LTP (Show) Differences
+      # LTP (RUN) Differences
       diff_ltp_1_2_run = ltp_2_run - ltp_run,
       diff_ltp_2_3_run = ltp_3_run - ltp_2_run,
       diff_ltp_3_4_run = ltp_4_run - ltp_3_run,
@@ -246,73 +342,66 @@ manipulate_train <- function(test_date, test_city){
       diff_ltp_8_9_run = ltp_9_run - ltp_8_run,
       diff_ltp_9_10_run = ltp_10_run - ltp_9_run,
       avg_ltp_run = sum(ltp_run, diff_ltp_1_2_run, diff_ltp_2_3_run, diff_ltp_3_4_run,
-                    diff_ltp_4_5_run, diff_ltp_5_6_run, diff_ltp_6_7_run,
-                    diff_ltp_7_8_run, diff_ltp_8_9_run, diff_ltp_9_10_run, na.rm = TRUE)/sum(!is.na(ltp_run), !is.na(diff_ltp_1_2_run), !is.na(diff_ltp_2_3_run), !is.na(diff_ltp_3_4_run),
-                                                                                 !is.na(diff_ltp_4_5_run), !is.na(diff_ltp_5_6_run), !is.na(diff_ltp_6_7_run), 
-                                                                                 !is.na(diff_ltp_7_8_run), !is.na(diff_ltp_8_9_run), !is.na(diff_ltp_9_10_run)),
+                        diff_ltp_4_5_run, diff_ltp_5_6_run, diff_ltp_6_7_run,
+                        diff_ltp_7_8_run, diff_ltp_8_9_run, diff_ltp_9_10_run, na.rm = TRUE)/sum(!is.na(ltp_run), !is.na(diff_ltp_1_2_run), !is.na(diff_ltp_2_3_run), !is.na(diff_ltp_3_4_run),
+                                                                                                 !is.na(diff_ltp_4_5_run), !is.na(diff_ltp_5_6_run), !is.na(diff_ltp_6_7_run), 
+                                                                                                 !is.na(diff_ltp_7_8_run), !is.na(diff_ltp_8_9_run), !is.na(diff_ltp_9_10_run)),
       recent_avg_ltp_run = sum(ltp_run, diff_ltp_1_2_run, diff_ltp_2_3_run, diff_ltp_3_4_run, diff_ltp_4_5_run, diff_ltp_5_6_run,
                                na.rm = TRUE)/sum(!is.na(ltp_run), !is.na(diff_ltp_1_2_run), !is.na(diff_ltp_2_3_run), !is.na(diff_ltp_3_4_run),
-                                                                                                 !is.na(diff_ltp_4_5_run), !is.na(diff_ltp_5_6_run)),
+                                                 !is.na(diff_ltp_4_5_run), !is.na(diff_ltp_5_6_run)),
       
+      # LTP Metrics
       ltp_run_diff =  abs(ltp_run - avg_ltp_run),
-      ltp_run_diff = if_else(ltp - avg_ltp > 0, ltp_diff, if_else(ltp - avg_ltp < 0, ltp_diff, 0.008)),
-      played_last_run = if_else(ltp_run == 1, 1, 0),
-      overdue_run = if_else(ltp - avg_ltp > 0, ltp_diff, 0),
+      ltp_run_diff = if_else(ltp_run - avg_ltp_run > 0, ltp_run_diff, if_else(ltp_run - avg_ltp_run < 0, ltp_run_diff, 0.001)),
+      ltp_run_ratio = ltp_run_diff / avg_ltp_run,
       
-      # Other Metrics
-      recnt_adj_due = (pct_shows_last_year - pct_shows_last_6_months),
-      raw_score = ((pct_shows_last_6_months * 18) + (pct_shows_last_year * 12) + (pct_shows_last_2_years * 6) + (pct_shows_all_time * 3) + diff_shows_same_city)/(ltp_diff),
-      raw_run_score = ((pct_runs_last_6_months * 18) + (pct_runs_last_year * 12) + (pct_runs_last_2_years * 6) + (pct_runs_all_time * 3) + diff_runs_same_city)/(ltp_run_diff)
+      # Recent LTP Metrics
+      recent_ltp_run_diff = abs(ltp_run - recent_avg_ltp_run),
+      recent_ltp_run_diff = if_else(ltp_run - recent_avg_ltp_run > 0, recent_ltp_run_diff, if_else(ltp_run - recent_avg_ltp_run < 0, recent_ltp_run_diff, 0.001)),
+      recent_ltp_run_ratio = recent_ltp_run_diff / recent_avg_ltp_run,
+      
+      # Played Last Run
+      played_this_run = if_else(ltp_run == 0, 1, 0),
+      played_last_run = if_else(ltp_run == 1, 1, 0),
+      overdue_run = if_else(ltp_run - avg_ltp_run > 0, ltp_run_diff, 0),
+      overdue_run_metric = if_else(ltp_run - avg_ltp_run > 0, ltp_run_diff*pct_runs_last_year, 0),
+      
+      # Score Metrics
+      raw_score = ((pct_shows_last_6_months * 10) + (pct_shows_last_year * 8) + (pct_shows_last_2_years * 6) + (pct_shows_last_10_years * 4) + (pct_shows_all_time * 2) + diff_shows_same_city + diff_shows_same_day + diff_shows_same_day_in_run)/(ltp_diff),
+      raw_run_score = ((pct_runs_last_6_months * 10) + (pct_runs_last_year * 8) + (pct_runs_last_2_years * 6) + (pct_runs_last_10_years * 4) + (pct_runs_all_time * 2) + diff_runs_same_city + diff_shows_same_day + diff_shows_same_day_in_run)/(ltp_run_diff),
+      raw_score = if_else(played_this_run == 1, 0, raw_score),
+      raw_run_score = if_else(played_this_run == 1, 0, raw_run_score)
     ) %>%
     ungroup()
   
-  #score_creation <- eligible_songs %>%  
-    #mutate(
-      #raw_score = score,
-      #raw_run_score = run_score,
-      #score = round(rescale(log(score)+1)*100,2),
-      #run_score = round(rescale(log(run_score)+1)*100,2),
-      #predict_type = case_when(
-        # 1) The Basics: (played at more than 20% of shows in last year and difference is < 1)
-       # ((score > 85 | (score > 75 & ltp_diff < 1 & ltp > 3 & pct_shows_last_year > .10 & ltp < 10) | (score > 75 & ltp > 4 & ltp < 15 & n_shows_all_time > 10))) ~ '1_High_Confidence',
-        # 2) Song is Due
-      #  (recnt_adj_due > 0.03 & ltp > 8 & score > 60) ~ '2_Medium_Confidence',
-        # 3) Low Confidence - Not quite a bust out but song hasn't been played in a bit
-       # (ltp <= 50 & ltp >= 15 & (ltp_diff < avg_ltp/20)) ~ '3_Low_Confidence',
-        # 4) Bust Outs: (Songs that haven't been played in a while but LTP lines up)
-        #(ltp > 50 & ltp < 150 & (ltp_diff < avg_ltp/10) & score > 45) ~ '4_Bustout',
-        #TRUE ~ NA
-      #)
-    #)%>%
-    #arrange(desc(score))
+  eligible_songs$city = test_city
+  eligible_songs$date = test_date
+  eligible_songs$venue_full = test_venue
+  eligible_songs$show_in_run = test_show_in_run
   
-return(eligible_songs)
+  return(eligible_songs)
 }
-predict_df <- manipulate_train(test_date = "2024-01-18", test_city = "ST. LOUIS")
-rare_songs <- predict_df %>% filter(n_shows_all_time <= 10)
 
-create_train_set <- function(end_date = '2024-01-20', beg_date = '2023-01-01'){
+# Task 2: Create Model Input File For Next Show (Best one of the year):
+sell_sell_table <- manipulate_train(test_date = "2024-01-20")
+
+# Task 3: Create Model Input Files For Last X Shows To Test Model:
+create_train_set <- function(end_date = max(model_data$date), train_n = 300){
   
   # Get Train/Test Date List
-  train_dates <- model_data %>% filter(date < end_date & date > beg_date) %>% select(date) %>% unique() %>% pull()
-  test_dates <- model_data %>% filter(date >= end_date) %>% select(date) %>% unique() %>% pull()
-  
-  print(paste0("Now Loading ", length(train_dates), " Concerts For Train"))
-  print(paste0("Now Loading ", length(test_dates), " Concerts For Test"))
-  
-  all_dates <- c(train_dates, test_dates)
+  train_dates <- model_data %>% filter(date <= end_date) %>% select(date) %>% arrange(desc(date)) %>% unique() %>% head(train_n) %>% pull()
+  print(paste0("Now Loading ", train_n, " Concerts From ", train_dates[[1]]," to ", train_dates[[length(train_dates)]]))
   
   list_of_dfs <- c()
   
   # Create Loop?
-  for(i in 1:length(all_dates)){
-    cty = model_data %>% filter(date == all_dates[i]) %>% select(city) %>% unique() %>% pull()
-    predict_table <- manipulate_train(test_date = all_dates[i], test_city = cty)
-    predict_table$date <- all_dates[i]
-    predict_table$city <- cty
-    predict_table$datatype <- ifelse(all_dates[i] %in% train_dates, 'Train', 'Test')
+  for(i in 1:length(train_dates)){
+    predict_table <- manipulate_train(test_date = train_dates[i])
+    #predict_table$date <- train_dates[i]
+    #predict_table$city <- cty
+    #predict_table$datatype <- ifelse(train_dates[i] %in% train_dates, 'Train', 'Test')
     
-    setlist <- model_data %>% filter(date == all_dates[i] & city == cty) %>% select(song_name) %>% unique() %>% pull()
+    setlist <- model_data %>% filter(date == train_dates[i]) %>% select(song_name) %>% unique() %>% pull()
     
     final_tbl <- predict_table %>% mutate(played = if_else(song_name %in% setlist, 1, 0))
     
@@ -324,99 +413,273 @@ create_train_set <- function(end_date = '2024-01-20', beg_date = '2023-01-01'){
   return(train_table)
   
 }
-check_model_table <- create_train_set()
+model_table <- create_train_set()
 
-build_model <- function(){
-  set.seed(123)  # for reproducibility
-  test_data <- check_model_table %>% filter(datatype == 'Test')
-  train_data <- check_model_table %>% filter(datatype == 'Train')
+# Task 4: Function For Building and Testing Model + Metrics
+build_model <- function(test_dte, n_shows = 250, rounds = 30, m_depth = 4, rt = 0.3){
+  set.seed(87)
+  
+  ## Pre-Processing ##
+  
+  # Split
+  test_data <- model_table %>% filter(date == test_dte)
+  train_data <- model_table %>% filter(date < test_dte)
+  filt_dates <- train_data %>% select(date) %>% filter(date < test_dte) %>% arrange(date) %>% unique() %>% tail(n_shows) %>% pull()
+  train_data <- model_table %>% filter(date %in% filt_dates)
 
   
-  test_index <- test_data$song_name
+  # Keep Indicies
+  song_index <- test_data$song_name
+  date_index <- test_data$date
+  city_index <- test_data$city
   
-  features <- names(train_data)[!names(train_data) %in% c("played", "city", "date", "datatype", "song_name")]
+  # Features And Targets
+  features <- names(train_data)[!names(train_data) %in% c("played", "city", "date", "venue_full", "song_name")]
   target <- "played"
+  
+  ## TRAIN ##
   
   # Train the xgboost model
   xgb_model <- xgboost(data = as.matrix(train_data[, features]),
                        label = as.numeric(train_data[[target]]),
                        objective = "binary:logistic",
-                       eval.metric ='logloss',
-                       max.depth=3,
-                       nrounds = 15,
-                       verbose = 1)
+                       eval.metric = 'logloss',
+                       max.depth=m_depth,
+                       nrounds = rounds,
+                       eta = rt,
+                       verbose = 0)
   
-  # Make predictions on the test set
+  ## PREDICT ##
+  
   pred_vec <- predict(xgb_model, as.matrix(test_data[, features]))
   
-  
-  
   model_predictions <<- data.frame(
-    song_name = test_index,
-    pred = pred_vec, actual = test_data[[target]]) %>%
-    arrange(desc(pred), desc(actual)) %>%
+    date = date_index,
+    city = city_index,
+    song_name = song_index,
+    pred = pred_vec, actual = test_data[[target]]
+    ) %>%
     mutate(
       log_pred = rescale(log(pred + 1))
-    )
-  print(model_predictions)
+    ) %>%
+    arrange(desc(log_pred), desc(actual))
   
-  # Evaluate model performance (you might use different metrics based on your problem)
-  confusion_matrix <- table(Actual = test_data[[target]], Predicted = round(model_predictions$log_pred))
+  print(model_predictions %>% head(5))
+  
+  ## METRICS ##
+  
+  feature_importance <- xgb.importance(feature_names = features, model = xgb_model)
+  top_features <- feature_importance %>% head(25)
+  
+  model_predictions <- model_predictions %>% mutate(optimal_pred = if_else(log_pred >= 0.4, 1, 0))
+  confusion_matrix <- table(Actual = model_predictions$actual, Predicted = model_predictions$optimal_pred)
   print(confusion_matrix)
   
+  acc <- mean(model_predictions$optimal_pred == model_predictions$actual)
+  prec <- sum(model_predictions$optimal_pred == 1 & model_predictions$actual == 1) / sum(model_predictions$optimal_pred == 1)
+  recall <- sum(model_predictions$optimal_pred == 1 & model_predictions$actual == 1) / sum(model_predictions$actual == 1)
+  f1_score <- 2 * prec * recall / (prec + recall)
+  roc_curve <- roc(model_predictions$actual, model_predictions$optimal_pred, warn.col = "transparent")
+  auc_roc <- auc(roc_curve)
+  
+  print(paste0("Show Date: ", test_dte, " | Accuracy: ", round(acc, 3), " | Precision: ", round(prec, 3), " | Recall: ", round(recall, 3), " | F1 Score: ", round(f1_score, 3), " | AUC: ", round(auc_roc,3)))
+  
+  correct_a0_p0 <- sum(model_predictions$actual == 0 & model_predictions$optimal_pred == 0)
+  correct_a1_p1 <- sum(model_predictions$actual == 1 & model_predictions$optimal_pred == 1)
+  correct_a1_p0 <- sum(model_predictions$actual == 1 & model_predictions$optimal_pred == 0)
+  correct_a0_p1 <- sum(model_predictions$actual == 0 & model_predictions$optimal_pred == 1)
+  
+  feat <- top_features %>% select(Feature) %>% pull()
+  gain <- top_features %>% select(Gain) %>% pull()
+  cov <- top_features %>% select(Cover) %>% pull()
+  freq <- top_features %>% select(Frequency) %>% pull()
+  
+  ## SAVE ACC METRICS ##
+  metrics_df <- data.frame(
+    date = test_dte,
+    train_start = filt_dates[[1]],
+    train_end = filt_dates[[length(filt_dates)]],
+    city = city_index[[1]],
+    accuracy = acc,
+    precision = prec,
+    recall = recall,
+    f1 = f1_score,
+    auc = as.numeric(auc_roc),
+    n_shows = n_shows,
+    max_depth = m_depth,
+    rounds = rounds,
+    eta = rt,
+    correct_a0_p0 = correct_a0_p0,
+    correct_a1_p1 = correct_a1_p1,
+    incorrect_a1_p0 = correct_a1_p0,
+    incorrect_a0_p1 = correct_a0_p1,
+    features_top = feat,
+    features_gain = gain,
+    features_cover = cov,
+    features_freq = freq
+  )
+  
+  model_predictions$city <- city_index
+  
+  
+  return(list(metrics_df, model_predictions))
+  
+}
+
+# Task 5: Loop Models For Years You Want To Test (Default is 2023+2024)
+# Produces Two Outputs In General Envrionment (acc_metrics)
+  # Model Accuracy Metrics For Each DataFrame (all_song_predictions_df)
+  # Setlist of Predictions and Actual For Each Show Tested
+
+loop_model <- function(yrs = c(2023, 2024)){
+  
+  # Get Test Dates #
+  test_dates <- model_table %>% select(date) %>% filter(year(date) %in% yrs & date != "2023-01-13") %>% unique() %>% arrange(desc(date)) %>% pull()
+  metrics_list_dfs <- c()
+  predict_songs_dfs <- c()
+  
+  # Loop Model Build #
+    for(i in 1:length(test_dates)){
+      return_list <- build_model(test_dates[[i]])
+      metrics_list_dfs[[i]] <- return_list[[1]]
+      predict_songs_dfs[[i]] <- return_list[[2]]
+    }
+  all_metrics <- bind_rows(metrics_list_dfs)
+  
+  acc_metrics <<-all_metrics %>% arrange(desc(date)) %>%
+    select(-starts_with('features_')) %>%
+    filter(date != '2023-01-13') %>%
+    unique()
+  
+  feat_metrics <<- all_metrics_df %>%
+    group_by(features_top) %>%
+    summarise(
+      n_times = n(),
+      avg_gain = mean(features_gain),
+      avg_cover = mean(features_cover),
+      avg_freq = mean(features_freq),
+      weight = n_times * avg_gain,
+    ) %>%
+    arrange(desc(weight))
+  
+  all_song_predictions_df <<- bind_rows(predict_songs_dfs) %>%
+    arrange(desc(date), desc(pred), desc(actual))
+
+}
+loop_model()
+
+# Task 6: "Apply" Model To Next Show Incorporating X Most Recent Shows
+make_predictions <- function(next_show_date, next_show_city){
+  ## Pre-Processing ##
+  
+  # Split
+  test_data <- manipulate_train(test_date = next_show_date)
+  train_data <- model_table %>% filter(date < next_show_date)
+  
+  #print(test_data %>% head(5))
+  #print(train_data %>% head(5))
+
+  # Keep Indicies
+  song_index <- test_data$song_name
+  date_index <- next_show_date
+  city_index <- next_show_city
+  
+  # Features And Targets
+  features <- names(train_data)[!names(train_data) %in% c("played", "venue_full", "city", "date", "song_name")]
+  target <- "played"
+  
+  ## TRAIN ##
+  
+  # Train the xgboost model
+  xgb_model <- xgboost(data = as.matrix(train_data[, features]),
+                       label = as.numeric(train_data[[target]]),
+                       objective = "binary:logistic",
+                       eval.metric = 'logloss',
+                       max.depth=4,
+                       nrounds = 30,
+                       eta = 0.3,
+                       verbose = 0)
+  
+  pred_vec <- predict(xgb_model, as.matrix(test_data[, features]))
+  
+  new_preds <- data.frame(
+    date = date_index,
+    city = city_index,
+    song_name = song_index,
+    pred = pred_vec
+  ) %>%
+    mutate(
+      pred_class = if_else(pred >= 0.5, "1_High_Confidence",
+                           if_else(pred >= 0.349 & pred < 0.5, "2_Medium_Confidence", 
+                                   if_else(pred >= 0.205 & pred < 0.349, "3_Low_Confidence", NA))),
+      pred = round(pred * 100, 2)
+    )
+  
+  new_preds$ltp_freq_score <- round(rescale(test_data$raw_score),3)
+  new_preds$overdue_metric <- round(test_data$overdue_metric,2)
+  new_preds$ltp <- test_data$ltp
+  new_preds$ltp_2 <- test_data$ltp_2
+  new_preds$ltp_3 <- test_data$ltp_3
+  new_preds$ltp_diff <- round(test_data$ltp_diff,2)
+  new_preds$diff_shows_same_day <- round(test_data$diff_shows_same_day,3)
+  new_preds$diff_shows_same_city <- round(test_data$diff_shows_same_city,3)
+  
+  print(new_preds  %>% filter(pred_class == "1_High_Confidence"))
+  return(new_preds)
+}
+sell_sell <- make_predictions("2024-02-15", "CHICAGO") %>% arrange(desc(pred))
+
+
+# Find Optimal Threshold
+get_optimal_thresh <- function(){
+  df <- data.frame(actual = all_song_predictions_df$actual,
+                   pred = all_song_predictions_df$pred)
   # Create a data frame to store results
   threshold_results <- data.frame(threshold = numeric(),
-                                  sensitivity = numeric(),
+                                  recall = numeric(),
                                   specificity = numeric(),
-                                  youden_j = numeric())
-  
+                                  precision = numeric(),
+                                  f1_score = numeric(),
+                                  accuracy = numeric())
   # Loop through possible threshold values
-  for (threshold in seq(0, 1, by = 0.001)) {
+  for (threshold in seq(0.05, 0.65, by = 0.001)) {
     # Reclassify based on the current threshold
-    threshold_predictions <- ifelse(model_predictions$log_pred >= threshold, 1, 0)
+    threshold_predictions <- ifelse(df$pred >= threshold, 1, 0)
     
     # Calculate confusion matrix
-    confusion_matrix <- table(Actual = as.numeric(model_predictions$actual), Predicted = threshold_predictions)
+    confusion_matrix <- table(Actual = df$actual, Predicted = threshold_predictions)
     
-    # Check if confusion matrix is of expected dimensions
-    if (nrow(confusion_matrix) == 2 && ncol(confusion_matrix) == 2) {
-      # Calculate sensitivity, specificity, and Youden's J
-      sensitivity <- confusion_matrix[2, 2] / sum(confusion_matrix[2, ])
-      specificity <- confusion_matrix[1, 1] / sum(confusion_matrix[1, ])
-      youden_j <- sensitivity + specificity - 1
-      
-      # Store results in the data frame
-      threshold_results <- rbind(threshold_results, 
-                                 data.frame(threshold = threshold,
-                                            sensitivity = sensitivity,
-                                            specificity = specificity,
-                                            youden_j = youden_j))
-    } else {
-      warning("Confusion matrix is not of expected dimensions.")
-    }
-  }
-  
-  # Find the threshold that maximizes Youden's J
-  if (nrow(threshold_results) > 0) {
-    optimal_threshold <- threshold_results$threshold[which.max(threshold_results$youden_j)]
+    # Calculate sensitivity, specificity, and Youden's J
+    recall <- confusion_matrix[2, 2] / sum(confusion_matrix[2, ])
+    specificity <- confusion_matrix[1, 1] / sum(confusion_matrix[1, ])
+    accuracy <- sum(diag(confusion_matrix)) / sum(confusion_matrix)
+    precision <- confusion_matrix[2, 2] / sum(confusion_matrix[, 2])
+    f1_score <- 2 * (precision * recall) / (precision + recall)
     
-    # Print the optimal threshold
-    print(paste("Optimal Threshold:", optimal_threshold))
-  } else {
-    warning("No valid threshold results.")
+    # Store results in the data frame
+    threshold_results <- rbind(threshold_results, 
+                               data.frame(threshold = threshold,
+                                          recall = recall,
+                                          specificity = specificity,
+                                          precision = precision,
+                                          f1_score = f1_score,
+                                          accuracy = accuracy))
   }
+  threshold_df <<- threshold_results %>% mutate(combo = precision + f1_score + accuracy)
+  # Find the threshold that maximizes F1 score
+  optimal_threshold_f1 <- threshold_results$threshold[which.max(threshold_results$f1_score)]
+  # Find the threshold that maximizes recall
+  optimal_threshold_recall <- threshold_results$threshold[which.max(threshold_results$recall)]
+  # Find the threshold that maximizes accuracy
+  optimal_threshold_accuracy <- threshold_results$threshold[which.max(threshold_results$accuracy)]
+  # Find the threshold that maximizes precision
+  optimal_threshold_precision <- threshold_results$threshold[which.max(threshold_results$precision)]
   
-  # Optionally, you can visualize feature importance
-  feature_importance <- xgb.importance(feature_names = features, model = xgb_model)
-  #print(feature_importance)
+  # Print the optimal threshold
+  print(paste("Optimal Threshold (F1 Score):", optimal_threshold_f1))
+  print(paste("Optimal Threshold (Recall):", optimal_threshold_recall))
+  print(paste("Optimal Threshold (Accuracy):", optimal_threshold_accuracy))
+  print(paste("Optimal Threshold (Precision):", optimal_threshold_precision))
   
-  model_predictions <<- model_predictions %>% mutate(optimal_pred = if_else(log_pred > optimal_threshold, 1, 0))
-  
-  opt_confusion_matrix <- table(Actual = model_predictions$actual, Predicted = model_predictions$optimal_pred)
-  print("Optimal Threshold Confusion Matrix")
-  print(opt_confusion_matrix)
-  
-  print("Accuracy Score:")
-  print(mean(model_predictions$optimal_pred == model_predictions$actual))
 }
-build_model()
+get_optimal_thresh()

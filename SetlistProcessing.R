@@ -3,6 +3,8 @@ library(rvest)
 library(lubridate)
 library(scales)
 library(xgboost)
+library(pROC)
+library(ggplot2)
 `%notin%` = Negate(`%in%`)
 
 ## DEFINE TWEAK FUNCTIONS ##
@@ -158,6 +160,12 @@ load_tour_dates <- function(st_yr = 1985 , end_yr = 2024) {
   return(tour_data)
 }
 tour_df <- load_tour_dates()
+future_shows <- tour_df %>%
+  filter(date > Sys.Date()) %>%
+  arrange(date) %>%
+  group_by(run_index) %>%
+  mutate(show_in_run  = (show_index -min(show_index))+1) %>%
+  ungroup()
 # PROCESS SETLISTS FROM LINK LOAD
 process_setlist <- function(setlist_link) {
   

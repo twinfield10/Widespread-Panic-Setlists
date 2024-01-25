@@ -1,12 +1,9 @@
-library(tidyverse)
-library(rvest)
-library(lubridate)
-`%notin%` = Negate(`%in%`)
+library(scales)
 
 # Load File
 full_data <- readRDS("Raw_WSP_Setlists_1985_2023.rds") %>%
   mutate(
-    set = if_else(set == 'E', 99, as.numeric(set))
+    set = if_else(substr(set, 1, 1) == 'E', 99, as.numeric(set))
   ) %>%
   group_by(link, show_index) %>%
   mutate(
@@ -19,7 +16,9 @@ full_data <- readRDS("Raw_WSP_Setlists_1985_2023.rds") %>%
 
 ### PREPROCESS DATA FOR MODEL ###
 
-# Task 1: Create Song Catalog
+# Task 1: Build LTP Input and Columns
+next_show = '2024-01-19'
+
 # Constants
 tot_shows <- n_distinct(full_data$link)
 tot_shows_last_6_months <- n_distinct(full_data %>% filter(difftime(next_show, date, units = "days") <= (365/2)) %>% select(link) %>% distinct())
@@ -118,6 +117,35 @@ song_catalog %>%
   select(song_name, pct_shows_all_time, pct_shows_last_6_months, pct_shows_last_year, pct_shows_last_2_years, ltp, avg_ltp, ltp_diff, score) %>%
   head(20) %>%
   print.data.frame()
+
+song_catalog <- song_catalog %>%
+  mutate(
+    score = round(rescale(log(score)+1)*100,2),
+    predict_type = case_when(
+      # 1) The Basics: (played at more than 20% of shows in last year and difference is < 1)
+      (off_shelf == TRUE & pct_shows_last_year > .2 & ltp_diff < 1 & score > 70) | (score > 70 & ltp > 3 & ltp < 20) ~ '1_High_Confidence',
+      # 2) Old Mikey Tunes Played More: (songs that have not been played a lot since Mikey passed)
+      (ltp > 5 & (pct_shows_mikey_years - pct_shows_last_2_years) > .10 & ltp_diff < 5) ~ '2_Mikey_Era_Bustout',
+      # 3) Bust Outs: (Songs that haven't been played in a while but LTP lines up)
+      (pct_shows_all_time < 0.03 & pct_shows_mikey_years > 0 & pct_shows_last_4_years > 0 & ltp > 50 & n_shows_all_time > 20) ~ '3_Bustout',
+      # 4) Rareties x HIgh Score
+      (song_name %in% c('THE WAKER','SANDBOX', "TRAVELIN' MAN", "DON'T TELL THE BAND", "GALLEON")) ~ '4_Rare_But_Possible',
+      # 5) Popular and not played last 3 Shows
+      (score > 60 & score <= 70 & ltp_diff < 3 & ltp_diff >= 1 & ltp > 2 & pct_shows_last_6_months > .15 & overdue == 0) ~ '5_Popular_But_Early',
+      TRUE ~ NA
+      )
+    )%>%
+  arrange(desc(score)) %>%
+  select(song_name, pct_shows_all_time, pct_shows_last_6_months, pct_shows_last_year, pct_shows_last_2_years, ltp, avg_ltp, ltp_diff, score, predict_type)
+
+song_catalog %>%
+   filter(!is.na(predict_type)) %>%
+   arrange(desc(score)) %>%
+   mutate(
+     rescaled_score = round(rescale(log(score)+1)*100,2)
+   ) %>%
+   select(song_name, pct_shows_all_time, pct_shows_last_year, ltp, avg_ltp, ltp_diff, score, rescaled_score, predict_type) %>%
+   print.data.frame()
 
 # Task 2: Create a column for the song played before
 #prepro_data <- prepro_data %>%

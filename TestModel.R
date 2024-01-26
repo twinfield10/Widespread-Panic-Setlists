@@ -386,8 +386,8 @@ manipulate_train <- function(test_date = future_shows$date[[1]]){
 sell_sell_table <- manipulate_train(test_date = "2024-01-20")
 
 # Task 3: Create Model Input Files For Last X Shows To Test Model:
-create_train_set <- function(end_date = max(model_data$date), train_n = 300){
-  
+create_train_set <- function(end_date = max(model_data$date), train_n = 500){
+  start_time <- Sys.time()
   # Get Train/Test Date List
   train_dates <- model_data %>% filter(date <= end_date) %>% select(date) %>% arrange(desc(date)) %>% unique() %>% head(train_n) %>% pull()
   print(paste0("Now Loading ", train_n, " Concerts From ", train_dates[[1]]," to ", train_dates[[length(train_dates)]]))
@@ -397,9 +397,6 @@ create_train_set <- function(end_date = max(model_data$date), train_n = 300){
   # Create Loop?
   for(i in 1:length(train_dates)){
     predict_table <- manipulate_train(test_date = train_dates[i])
-    #predict_table$date <- train_dates[i]
-    #predict_table$city <- cty
-    #predict_table$datatype <- ifelse(train_dates[i] %in% train_dates, 'Train', 'Test')
     
     setlist <- model_data %>% filter(date == train_dates[i]) %>% select(song_name) %>% unique() %>% pull()
     
@@ -409,6 +406,10 @@ create_train_set <- function(end_date = max(model_data$date), train_n = 300){
   }
   
   train_table <- bind_rows(list_of_dfs)
+  
+  end_time <- Sys.time()
+  elapsed_time <- as.numeric(difftime(end_time, start_time, units = "mins"))
+  print(paste0("Loading of ", train_n, " Concerts From ", train_dates[[1]]," to ", train_dates[[length(train_dates)]], " Completed in ", round(elapsed_time, 2)," Minutes"))
 
   return(train_table)
   
@@ -416,7 +417,7 @@ create_train_set <- function(end_date = max(model_data$date), train_n = 300){
 model_table <- create_train_set()
 
 # Task 4: Function For Building and Testing Model + Metrics
-build_model <- function(test_dte, n_shows = 250, rounds = 30, m_depth = 4, rt = 0.3){
+build_model <- function(test_dte, n_shows = 400, rounds = 25, m_depth = 5, rt = 0.3){
   set.seed(87)
   
   ## Pre-Processing ##
@@ -464,7 +465,7 @@ build_model <- function(test_dte, n_shows = 250, rounds = 30, m_depth = 4, rt = 
     ) %>%
     arrange(desc(log_pred), desc(actual))
   
-  print(model_predictions %>% head(5))
+  #print(model_predictions %>% head(5))
   
   ## METRICS ##
   
@@ -479,7 +480,7 @@ build_model <- function(test_dte, n_shows = 250, rounds = 30, m_depth = 4, rt = 
   prec <- sum(model_predictions$optimal_pred == 1 & model_predictions$actual == 1) / sum(model_predictions$optimal_pred == 1)
   recall <- sum(model_predictions$optimal_pred == 1 & model_predictions$actual == 1) / sum(model_predictions$actual == 1)
   f1_score <- 2 * prec * recall / (prec + recall)
-  roc_curve <- roc(model_predictions$actual, model_predictions$optimal_pred, warn.col = "transparent")
+  roc_curve <- roc(model_predictions$actual, model_predictions$optimal_pred, quiet = TRUE)
   auc_roc <- auc(roc_curve)
   
   print(paste0("Show Date: ", test_dte, " | Accuracy: ", round(acc, 3), " | Precision: ", round(prec, 3), " | Recall: ", round(recall, 3), " | F1 Score: ", round(f1_score, 3), " | AUC: ", round(auc_roc,3)))
@@ -530,8 +531,7 @@ build_model <- function(test_dte, n_shows = 250, rounds = 30, m_depth = 4, rt = 
 # Produces Two Outputs In General Envrionment (acc_metrics)
   # Model Accuracy Metrics For Each DataFrame (all_song_predictions_df)
   # Setlist of Predictions and Actual For Each Show Tested
-
-loop_model <- function(yrs = c(2023, 2024)){
+loop_model <- function(yrs = c(2022, 2023, 2024)){
   
   # Get Test Dates #
   test_dates <- model_table %>% select(date) %>% filter(year(date) %in% yrs & date != "2023-01-13") %>% unique() %>% arrange(desc(date)) %>% pull()
@@ -575,9 +575,6 @@ make_predictions <- function(next_show_date, next_show_city){
   # Split
   test_data <- manipulate_train(test_date = next_show_date)
   train_data <- model_table %>% filter(date < next_show_date)
-  
-  #print(test_data %>% head(5))
-  #print(train_data %>% head(5))
 
   # Keep Indicies
   song_index <- test_data$song_name
@@ -595,13 +592,112 @@ make_predictions <- function(next_show_date, next_show_city){
                        label = as.numeric(train_data[[target]]),
                        objective = "binary:logistic",
                        eval.metric = 'logloss',
-                       max.depth=4,
-                       nrounds = 30,
+                       max.depth=5,
+                       nrounds = 25,
                        eta = 0.3,
                        verbose = 0)
   
   pred_vec <- predict(xgb_model, as.matrix(test_data[, features]))
   
+  # Run Optimal Thresholds From Model Train
+  get_optimal_thresh <- function(){
+    df <- data.frame(actual = all_song_predictions_df$actual,
+                     pred = all_song_predictions_df$pred)
+    # Create a data frame to store results
+    threshold_results <- data.frame(threshold = numeric(),
+                                    recall = numeric(),
+                                    specificity = numeric(),
+                                    precision = numeric(),
+                                    f1_score = numeric(),
+                                    auc_score = numeric(),
+                                    accuracy = numeric(),
+                                    combo_score = numeric)
+    # Loop through possible threshold values
+    max_t <- round(max(df$pred)-0.03, 2)
+    min_t <- round(min(df$pred)+0.01, 2)
+    print(paste0("Testing Thresholds Between ",min_t," and ",max_t))
+    for (threshold in seq(min_t, max_t, by = 0.001)) {
+      # Reclassify based on the current threshold
+      threshold_predictions <- ifelse(df$pred >= threshold, 1, 0)
+      
+      # Calculate confusion matrix
+      confusion_matrix <- table(Actual = df$actual, Predicted = threshold_predictions)
+      
+      # Calculate Accuracy Metrics
+      recall <- confusion_matrix[2, 2] / sum(confusion_matrix[2, ])
+      specificity <- confusion_matrix[1, 1] / sum(confusion_matrix[1, ])
+      accuracy <- sum(diag(confusion_matrix)) / sum(confusion_matrix)
+      precision <- confusion_matrix[2, 2] / sum(confusion_matrix[, 2])
+      f1_score <- 2 * (precision * recall) / (precision + recall)
+      auc_score <- auc(df$actual, threshold_predictions, quiet = TRUE)
+      combo_score <- precision + f1_score + accuracy + auc_score
+      
+      # Store results in the data frame
+      threshold_results <- rbind(threshold_results, 
+                                 data.frame(threshold = threshold,
+                                            recall = recall,
+                                            specificity = specificity,
+                                            precision = precision,
+                                            f1_score = f1_score,
+                                            auc_score = auc_score,
+                                            accuracy = accuracy,
+                                            combo_score = combo_score))
+    }
+    
+    # Rescale Combination + Smooth Points
+    threshold_results$auc_score <- as.numeric(threshold_results$auc_score)
+    threshold_results <- threshold_results %>%
+      mutate(
+        combo_score = rescale(combo_score)
+      )
+    
+    # Save to GenEnv
+    threshold_df <<- threshold_results
+    
+    
+    # Plot Optimal Thresholds
+    piv_df <- pivot_longer(threshold_results,
+                           cols = -threshold,
+                           names_to = "Metric",
+                           values_to = "Value")
+    max_df <- piv_df %>%
+      group_by(Metric) %>%
+      mutate(smooth = predict(loess(Value~threshold, span=.5))) %>%
+      slice_max(order_by = smooth) %>%
+      select(Metric, threshold, Value, smooth)
+    
+    plt <- ggplot(piv_df, aes(x = threshold, y = Value, color = Metric)) +
+      geom_point(data = max_df, aes(x = threshold, y = smooth, color = Metric), size = 3) +
+      geom_smooth(aes(group = Metric, color = Metric), span = 0.5, method = "loess", se = FALSE, linetype = "solid") +
+      labs(title = "WSP Setlist Model - Evaluation Metric by Threshold",
+           subtitle = "Based on Testing Model Results of Concerts From 2022-2024 (92 Shows) | Each Show Trained on Last 400 Concerts",
+           x = "Threshold", y = "Smoothed Eval Metric Score (0-1)") +
+      theme_bw() +
+      theme(
+        legend.position = "right",
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5)
+        ) +
+      xlim(min_t, max_t)
+    print(plt)
+    
+    # Print the optimal threshold
+    print(paste("Optimal Threshold (F1 Score):", max_df[max_df$Metric == 'f1_score', 'threshold']))
+    print(paste("Optimal Threshold (Recall):", max_df[max_df$Metric == 'recall', 'threshold']))
+    print(paste("Optimal Threshold (Precision):", max_df[max_df$Metric == 'precision', 'threshold']))
+    print(paste("Optimal Threshold (Accuracy):", max_df[max_df$Metric == 'accuracy', 'threshold']))
+    print(paste("Optimal Threshold (AUC):", max_df[max_df$Metric == 'auc_score', 'threshold']))
+    print(paste("Optimal Threshold (Combination):", max_df[max_df$Metric == 'combo_score', 'threshold']))
+    
+    return(max_df %>% ungroup())
+    
+  }
+  opt_df <- get_optimal_thresh()
+  
+  tier_1_threshold <- opt_df %>% filter(Metric == 'precision') %>% select(threshold) %>% pull() # Optimizing Precision
+  tier_2_threshold <- opt_df %>% filter(Metric == 'f1_score') %>% select(threshold) %>% pull()  # Optimizing Precision + Recall
+  tier_3_threshold <- 0.0612 # Optimizing AUC
+
   new_preds <- data.frame(
     date = date_index,
     city = city_index,
@@ -609,9 +705,9 @@ make_predictions <- function(next_show_date, next_show_city){
     pred = pred_vec
   ) %>%
     mutate(
-      pred_class = if_else(pred >= 0.5, "1_High_Confidence",
-                           if_else(pred >= 0.349 & pred < 0.5, "2_Medium_Confidence", 
-                                   if_else(pred >= 0.205 & pred < 0.349, "3_Low_Confidence", NA))),
+      pred_class = if_else(pred >= tier_1_threshold, "1_High_Confidence",
+                           if_else(pred >= tier_2_threshold & pred < tier_1_threshold, "2_Medium_Confidence", 
+                                   if_else(pred >= tier_3_threshold & pred < tier_2_threshold, "3_InPlay", NA))),
       pred = round(pred * 100, 2)
     )
   
@@ -624,62 +720,9 @@ make_predictions <- function(next_show_date, next_show_city){
   new_preds$diff_shows_same_day <- round(test_data$diff_shows_same_day,3)
   new_preds$diff_shows_same_city <- round(test_data$diff_shows_same_city,3)
   
-  print(new_preds  %>% filter(pred_class == "1_High_Confidence"))
+  print(new_preds %>% arrange(desc(pred)) %>% head(5))
   return(new_preds)
 }
 sell_sell <- make_predictions("2024-02-15", "CHICAGO") %>% arrange(desc(pred))
 
 
-# Find Optimal Threshold
-get_optimal_thresh <- function(){
-  df <- data.frame(actual = all_song_predictions_df$actual,
-                   pred = all_song_predictions_df$pred)
-  # Create a data frame to store results
-  threshold_results <- data.frame(threshold = numeric(),
-                                  recall = numeric(),
-                                  specificity = numeric(),
-                                  precision = numeric(),
-                                  f1_score = numeric(),
-                                  accuracy = numeric())
-  # Loop through possible threshold values
-  for (threshold in seq(0.05, 0.65, by = 0.001)) {
-    # Reclassify based on the current threshold
-    threshold_predictions <- ifelse(df$pred >= threshold, 1, 0)
-    
-    # Calculate confusion matrix
-    confusion_matrix <- table(Actual = df$actual, Predicted = threshold_predictions)
-    
-    # Calculate sensitivity, specificity, and Youden's J
-    recall <- confusion_matrix[2, 2] / sum(confusion_matrix[2, ])
-    specificity <- confusion_matrix[1, 1] / sum(confusion_matrix[1, ])
-    accuracy <- sum(diag(confusion_matrix)) / sum(confusion_matrix)
-    precision <- confusion_matrix[2, 2] / sum(confusion_matrix[, 2])
-    f1_score <- 2 * (precision * recall) / (precision + recall)
-    
-    # Store results in the data frame
-    threshold_results <- rbind(threshold_results, 
-                               data.frame(threshold = threshold,
-                                          recall = recall,
-                                          specificity = specificity,
-                                          precision = precision,
-                                          f1_score = f1_score,
-                                          accuracy = accuracy))
-  }
-  threshold_df <<- threshold_results %>% mutate(combo = precision + f1_score + accuracy)
-  # Find the threshold that maximizes F1 score
-  optimal_threshold_f1 <- threshold_results$threshold[which.max(threshold_results$f1_score)]
-  # Find the threshold that maximizes recall
-  optimal_threshold_recall <- threshold_results$threshold[which.max(threshold_results$recall)]
-  # Find the threshold that maximizes accuracy
-  optimal_threshold_accuracy <- threshold_results$threshold[which.max(threshold_results$accuracy)]
-  # Find the threshold that maximizes precision
-  optimal_threshold_precision <- threshold_results$threshold[which.max(threshold_results$precision)]
-  
-  # Print the optimal threshold
-  print(paste("Optimal Threshold (F1 Score):", optimal_threshold_f1))
-  print(paste("Optimal Threshold (Recall):", optimal_threshold_recall))
-  print(paste("Optimal Threshold (Accuracy):", optimal_threshold_accuracy))
-  print(paste("Optimal Threshold (Precision):", optimal_threshold_precision))
-  
-}
-get_optimal_thresh()

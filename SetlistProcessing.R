@@ -1,15 +1,22 @@
+# General
 library(tidyverse)
 library(rvest)
 library(lubridate)
 library(scales)
-library(xgboost)
-library(pROC)
-library(ggplot2)
 `%notin%` = Negate(`%in%`)
 
-## DEFINE TWEAK FUNCTIONS ##
+# Modeling
+library(xgboost)
+library(pROC)
 
-# LOAD TOUR DATES AND VENUES
+# Plotting
+library(ggplot2)
+
+###################################
+## DEFINE LOAD + CLEAN FUNCTIONS ##
+###################################
+
+# Functions 1: Load All Show Information via EveryDayCompanion
 load_tour_dates <- function(st_yr = 1985 , end_yr = 2024) {
   base_url <- 'http://everydaycompanion.com/'
   tour_list <- as.list(st_yr:end_yr)
@@ -147,26 +154,24 @@ load_tour_dates <- function(st_yr = 1985 , end_yr = 2024) {
   # Combine DataFrames From Loop List
   tour_data <- bind_rows(tour_df_list) %>% arrange(year, month, day) %>% rowid_to_column('show_index')
   
-  # Create Run Index
+  # Create Run Index + Show In Run Index
   tour_data <- tour_data %>%
     arrange(date, venue_name) %>%  # Sort data by 'venue' and 'date'
     group_by(venue_name, run_index = cumsum(c(1, diff(date) != 1))) %>%  # Create groups based on consecutive dates and venue
     ungroup() %>%
-    select(link, date, date_num, year, month, day, state, city, venue_name, venue_full, run_index, show_index, year_index, venue)
-  
+    arrange(date, run_index) %>%
+    mutate(show_in_run  = (show_index -min(show_index))+1) %>%
+    ungroup()  %>%
+    select(link, date, date_num, year, month, day, state, city, venue_name, venue_full, run_index, show_index, show_in_run, year_index, venue)
+    
+  # Peek
   print(tour_data %>% head())
   
-  # Return Final DataFrame
+  # Return
   return(tour_data)
 }
-tour_df <- load_tour_dates()
-future_shows <- tour_df %>%
-  filter(date > Sys.Date()) %>%
-  arrange(date) %>%
-  group_by(run_index) %>%
-  mutate(show_in_run  = (show_index -min(show_index))+1) %>%
-  ungroup()
-# PROCESS SETLISTS FROM LINK LOAD
+
+# Function 2: Process + Clean Single Show Setlist via EveryDayCompanion
 process_setlist <- function(setlist_link) {
   
   tryCatch({
@@ -215,7 +220,7 @@ process_setlist <- function(setlist_link) {
       select('set', 'song_name', 'into', 'song_index', 'song_notes_key', 'notes_id')
     
     # Tour Library
-    join_df <- tour_df %>% filter(link == setlist_link)
+    join_df <- dim_historical %>% filter(link == setlist_link)
     
     # Mutate
     songs <- mutate(songs, link = setlist_link) %>%
@@ -319,12 +324,12 @@ process_setlist <- function(setlist_link) {
   })
 }
 
-## DEFINE LOAD/UPDATE FUNCTIONS ##
+# Function 3: Loop Over process_setlist to create DataFrame
 load_all_setlists <- function(st_yr = 1985 , end_yr = 2024){
   start_time <- Sys.time()
   
   # Download Calendar Using Links
-  data <- map_dfr(tour_df$link, process_setlist)
+  data <- map_dfr(dim_historical$link, process_setlist)
   
   end_time <- Sys.time()
   elapsed_time <- as.numeric(difftime(end_time, start_time, units = "mins"))
@@ -339,14 +344,16 @@ load_all_setlists <- function(st_yr = 1985 , end_yr = 2024){
   # Return
   return(data)
 }
+
+# Function 4: Update Setlist DataFrame
 update_setlist <- function(yr = 2024){
   exist_df <- readRDS("Raw_WSP_Setlists_1985_2024.rds") %>% filter(year <= (2023))
   
-  new_shows <- load_tour_dates(st_yr = yr, end_yr = yr)
+  new_shows <- load_tour_dates(st_yr = yr, end_yr = 2024)
   
   new_df <- map_dfr(new_shows$link, process_setlist, new_shows)
   
-  final_df <- rbind(exist_df, new_df) %>% unique() %>% arrange(year, month, day, set, song_index)
+  final_df <- rbind(exist_df, new_df) %>% unique() %>% arrange(year, month, day, run_index, show_index, set, song_index)
   
   saveRDS(full_data, file = "Raw_WSP_Setlists_1985_2024.rds")
   write_csv(full_data, file = "Raw_WSP_Setlists_1985_2024.csv")
@@ -354,7 +361,29 @@ update_setlist <- function(yr = 2024){
   return(final_df)
 }
 
+########################################
+## LOAD DATA INTO GENERAL ENVIRONMENT ##
+########################################
+
+# 1) Load All Show Information (Historical And Future) as Dimensional Table
+dim_show <- load_tour_dates()
+
+# 2) Separate Into Future and Historical + Remove Full DataFrame
+dim_historical <- subset(dim_show, date < Sys.Date())
+dim_future <- subset(dim_show, date >= Sys.Date())
+rm(dim_show)
+
+# 3) Load All Setlists
 full_data <- load_all_setlists()
+
+
+##########################
+## UPDATE EXISTING DATA ##
+##########################
+
+
+# Update Data With New Setlists
+full_setlist <- update_setlist()
 
 
 

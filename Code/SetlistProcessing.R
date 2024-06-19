@@ -12,6 +12,7 @@ library(caret)
 library(Metrics)
 # Plotting
 library(ggplot2)
+`%notin%` <- Negate(`%in%`)
 
 ###################################
 ## DEFINE LOAD + CLEAN FUNCTIONS ##
@@ -200,7 +201,7 @@ process_dim <- function(st_yr = 1986 , end_yr = 2024){
     ungroup()  %>%
     select(link, date, date_num, year, month, day, state, city, venue_name, venue_full, run_index, show_index, show_in_run, year_index, venue, is_radio)
   
-  return(bind_rows(tour_df_list))
+  return(tour_data)
   
 }
 process_setlist <- function(setlist_link) {
@@ -344,35 +345,32 @@ process_setlist <- function(setlist_link) {
     
     return(songs)
 }
-
 # Functions 1: Load All Show Information via EveryDayCompanion
 load_all_data <- function(start = 1986 , end = 2024) {
   
   # Load Dim Stage 1
-  tour_data <- process_dim(st_yr = start, end_yr = end)
+  tour_data <- process_dim(st_yr = 1986, end_yr = 2024)
   
   # Split Historical and Future
-  show_dim <- subset(dim_show, date < Sys.Date()) %>% filter(year >= start & year <= end)
-  fut_dim <- subset(dim_show, date >= Sys.Date())
+  show_dim <- tour_data %>% filter(date < Sys.Date()) %>% filter(year >= start & year <= end)
+  fut_dim <- tour_data %>% filter(date >= Sys.Date())
     
   # Peek
   print(paste0(length(show_dim$date)," Historical & ", length(fut_dim$date)," Future Shows And EDC Links Loaded - Now Loading Setlists"))
-  print(tour_data %>% head())
+  print(show_dim %>% arrange(-show_index) %>% head())
   
   # Load Setlists
   start_time <- Sys.time()
-
+  
+  # Historical Song
+  #prev_song <- readRDS("./Data/WSP_Song_FactTable_1986_to_2024.rds") %>% filter(link != "http://everydaycompanion.com/setlists/20240525a.asp")
+  #load_links <- show_dim %>% filter(year >= 2024 & link %notin% unique(prev_song$link)) %>% pull(link) %>% unique()
+  
+  #update_songs <- map_dfr(load_links, process_setlist)
   songs <- map_dfr(show_dim$link, process_setlist)
   
-  dim_songs <- songs %>%
-    group_by(link, show_notes) %>%
-    mutate(n_songs = max(song_index)) %>%
-    ungroup() %>%
-    select(link, show_notes, n_songs) %>%
-    unique()
-  
   # Songs
-  songs <- songs %>%
+  songs <-  songs %>% #
     mutate(
       song_note_detail = if_else(song_note_detail == "", NA, song_note_detail),
       show_notes = if_else(show_notes == "", NA, show_notes),
@@ -389,12 +387,20 @@ load_all_data <- function(start = 1986 , end = 2024) {
       set = if_else(set == 0 & min_set == 0 & max_set %in% c(99,0), 1, set)
     ) %>%
     ungroup() %>%
-    select(link, set, song_index, song_name, into, song_note_detail)
+    select(link, set, song_index, song_name, into, song_note_detail, show_notes)
+  
+  #all_songs <- rbind(prev_song, songs)
+  
+  dim_songs <- songs %>%
+    group_by(link, show_notes) %>%
+    mutate(n_songs = max(song_index)) %>%
+    ungroup() %>%
+    select(link, show_notes, n_songs) %>%
+    unique()
   
   # Show Information
   # Slim Future
-  Slim_Fut <- dim_future %>%
-    select(-c(year_index, run_index, show_index, show_in_run)) %>%
+  Slim_Fut <- fut_dim %>%
     mutate(
       show_notes = "",
       n_songs = 0,
@@ -402,6 +408,7 @@ load_all_data <- function(start = 1986 , end = 2024) {
       is_fut = 1
     ) %>%
     arrange(date)
+  
   
   dim <- show_dim %>%
     left_join(dim_songs, by = 'link') %>%
@@ -431,18 +438,18 @@ load_all_data <- function(start = 1986 , end = 2024) {
     ) %>%
     arrange(show_index) %>%
     filter(is_soundcheck != 1 & is_radio != 1) %>%
-    select(-c(year_index, run_index, show_index, show_in_run, is_radio, is_soundcheck)) %>%
-    rbind(Slim_Fut) %>%
+    select(-c(is_soundcheck)) %>%
+    rbind(Slim_Fut) #%>%
     # Show Index
-    mutate(show_index = row_number()) %>% arrange(show_index) %>%
+    #mutate(show_index = row_number()) %>% arrange(show_index) %>%
     # Year Index
-    group_by(year) %>% mutate(year_index = row_number()) %>% ungroup() %>%
+    #group_by(year) %>% mutate(year_index = row_number()) %>% ungroup() %>%
     # Run Index
-    mutate(run_index = 1 + cumsum(
-      venue_full != lag(venue_full, default = first(venue_full)) |
-        date != lag(date + 1, default = first(date)))) %>% arrange(show_index) %>%
+    #mutate(run_index = 1 + cumsum(
+    #  venue_full != lag(venue_full, default = first(venue_full)) |
+    #    date != lag(date + 1, default = first(date)))) %>% arrange(show_index) %>%
     # Show In Run
-    group_by(run_index) %>% mutate(show_in_run  = (show_index -min(show_index))+1) %>% ungroup()
+    #group_by(run_index) %>% mutate(show_in_run  = (show_index -min(show_index))+1) %>% ungroup()
     
   
   end_time <- Sys.time()
@@ -457,7 +464,6 @@ load_all_data <- function(start = 1986 , end = 2024) {
   return(ret_list)
 }
 data_list <- load_all_data(start = 1986, end = 2024)
-
 # Create Tables
 fact_song <- data_list[[1]]
 dim_historical <- data_list[[2]]
@@ -469,91 +475,6 @@ saveRDS(fact_song, file = paste0("./Data/WSP_Song_FactTable_", min(as.numeric(su
 saveRDS(dim_historical, file = paste0("./Data/WSP_Dim_Show_Historical_", min(as.numeric(substr(dim_historical$link, 39,42))),  "_to_", max(as.numeric(substr(dim_historical$link, 39,42))), ".rds"))
 saveRDS(dim_future, file = paste0("./Data/WSP_Dim_Show_Future_", min(as.numeric(substr(dim_future$link, 39,42))),  "_to_", max(as.numeric(substr(dim_future$link, 39,42))), ".rds"))
 
-# Free Up Space
-#rm(fact_song, dim_historical, dim_future)
-gc()
-
-# Function 2: Process + Clean Single Show Setlist via EveryDayCompanion
-
-# Function 3: Loop Over process_setlist to create DataFrame
-load_all_setlists <- function(st_yr = 1986 , end_yr = 2024){
-  start_time <- Sys.time()
-  
-  # Download Calendar Using Links
-  show_dim <- dim_historical %>% filter(year >= st_yr & year <= end_yr)
-  data <- map_dfr(show_dim$link, process_setlist)
-  
-  # Mutate Table For Indexes
-  data <- data %>%
-    mutate(
-      set_num = case_when(
-        set == 'E' ~ "99",
-        TRUE ~ set
-      ),
-      set = as.numeric(set_num),
-      weekday = weekdays(date)
-    ) %>%
-    group_by(link, show_index) %>%
-    mutate(
-      min_set = min(as.numeric(set)),
-      max_set = min(as.numeric(set)),
-      set = if_else(set == 0 & min_set == 0 & max_set %in% c(99,0), 1, set)
-    ) %>%
-    select(-c(min_set, max_set, set_num)) %>%
-    filter(!is.na(run_index)) %>%
-    ungroup()
-  
-  end_time <- Sys.time()
-  elapsed_time <- as.numeric(difftime(end_time, start_time, units = "mins"))
-  print(paste0('Successfully Loaded ',length(unique(data$link)),' Widespread Panic Shows (', nrow(data),' Total Rows/Songs) in ', round(elapsed_time, 2),' Minutes From ', min(data$year), ' to ', max(data$year)))
-  print(data %>% head())
-  
-  # Save
-  ## SAVE FILE FOR MODEL AND ANALYSIS
-  saveRDS(data, file = paste0("./Data/Raw_WSP_Setlists_",st_yr,"_",end_yr,".rds"))
-}
-
-# Function 4: Update Setlist DataFrame
-update_setlist <- function(yr = 2024){
-  exist_df <- readRDS("./Data/Raw_WSP_Setlists_1986_2024.rds") %>% filter(year <= (yr-1))
-  
-  max_ri <- max(exist_df$run_index)
-  max_si <- max(exist_df$show_index)
-  
-  new_shows <- load_tour_dates(st_yr = yr, end_yr = 2024)
-  
-  new_df <- map_dfr(new_shows$link, process_setlist) %>%
-    mutate(
-      run_index = run_index + max_ri,
-      show_index = show_index + max_si
-    )
-  
-  final_df <- rbind(exist_df, new_df) %>% unique() %>% arrange(year, month, day, run_index, show_index, set, song_index)
-  
-  saveRDS(final_df, file = "./Data/Raw_WSP_Setlists_1986_2024.rds")
-}
-
-########################################
-## LOAD DATA INTO GENERAL ENVIRONMENT ##
-########################################
-
-# 1) Load All Show Information (Historical And Future) as Dimensional Table
-dim_show <- load_tour_dates()
-
-# 2) Separate Into Future and Historical + Remove Full DataFrame
-dim_historical <- subset(dim_show, date < Sys.Date())
-dim_future <- subset(dim_show, date >= Sys.Date())
-
-# 3) Load All Setlists (Saves To RDS and CSV) **EST TIME TO LOAD = **
-load_all_setlists(st_yr = 2022)
-
-
-##########################
-## UPDATE EXISTING DATA ##
-##########################
-
-# 1) Update Data With New Setlists (Saves To RDS and CSV)
-update_setlist()
 
 
 

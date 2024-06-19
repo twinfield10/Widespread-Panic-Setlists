@@ -3,30 +3,98 @@ library(paletteer)
 ## Most Current Song Catelog Table with Stats ##
 
 sell_sell_table %>%
-  head(5)
+  select(song_name, pct_shows_since_debut, pct_shows_same_city) %>%
+  mutate(diff_shows_same_city = pct_shows_same_city - pct_shows_since_debut) %>%
+  arrange(-diff_shows_same_city) %>%
+  filter(song_name == 'CITY OF DREAMS') %>%
+  head(10)
+
+write.csv(sell_sell, './Data/RRXN1Preds.csv')
 
 # Song Predictions Since 2021 (all_song_predictions_df)
 tommy_shows <- c("2023-12-29", "2022-09-18", '2022-09-17', '2022-09-16', '2022-07-24', '2022-07-23', '2022-07-22', '2022-05-07', '2022-05-06', '2021-08-07', '2021-08-07', '2021-08-06')
 # Rarest Songs
 all_song_predictions_df %>%
-  filter(actual == 1 & date %in% tommy_shows) %>%
+  filter(actual == 1) %>%
   arrange(-ltp) %>%
   select(date, venue_full, song_name, ltp, pred, actual) %>%
   head(20) %>%
   print.data.frame()
 
+# Popular Predictions Based on Prediction Vs Since Debut
+sell_sell %>%
+  filter(n_shows_all_time > 20 & pred <= 0.1) %>%
+  mutate(
+    pred_diff = pred - pct_shows_since_debut,
+    pred_diff_pct = pred_diff / pct_shows_since_debut
+  ) %>%
+  select(song_name, n_shows_all_time, ltp, recent_avg_ltp, raw_score, pred, pct_shows_since_debut, pred_diff, pred_diff_pct) %>%
+  arrange(-pred_diff_pct) %>%
+  head(20)
+
+# By Same Day
+all_song_predictions_df %>%
+  mutate(
+    weekday = weekdays(date)
+  ) %>%
+  group_by(song_name, weekday) %>%
+  summarise(
+    day_pred = mean(pred),
+    day_cnt = sum(actual)
+  ) %>%
+  ungroup() %>%
+  filter(day_cnt > 1) %>%
+  rbind(
+    all_song_predictions_df %>%
+      mutate(
+        weekday = weekdays(date)
+      ) %>%
+      group_by(song_name) %>%
+      summarise(
+        weekday = "Total",
+        day_pred = mean(pred),
+        day_cnt = n()
+      ) %>%
+      ungroup() %>%
+      filter(day_cnt > 1)
+  ) %>%
+  select(song_name, weekday, day_pred, day_cnt) %>%
+  pivot_wider(id_cols = song_name, names_from = weekday, values_from = c(day_pred, day_cnt)) %>%
+  mutate(
+    Diff_Friday = day_pred_Friday - day_pred_Total,
+    Diff_Monday = day_pred_Monday - day_pred_Total,
+    Diff_Saturday = day_pred_Saturday - day_pred_Total,
+    Diff_Sunday = day_pred_Sunday - day_pred_Total,
+    Diff_Thursday = day_pred_Thursday - day_pred_Total,
+    Diff_Tuesday = day_pred_Tuesday - day_pred_Total,
+    Diff_Wednesday = day_pred_Wednesday - day_pred_Total,
+    
+    Pct_Friday = Diff_Friday/day_pred_Total,
+    Pct_Monday = Diff_Monday/day_pred_Total,
+    Pct_Saturday = Diff_Saturday/day_pred_Total,
+    Pct_Sunday = Diff_Sunday/day_pred_Total,
+    Pct_Thursday = Diff_Thursday/day_pred_Total,
+    Pct_Tuesday = Diff_Tuesday/day_pred_Total,
+    Pct_Wednesday = Diff_Wednesday/day_pred_Total
+  ) %>%
+  select(song_name, ends_with('_Thursday'), ends_with("Total")) %>%
+  arrange(-Pct_Thursday) %>%
+  head(10)
+  
+
 # Weirdly Popular Relative To Previous Scores
 all_song_predictions_df %>%
   group_by(song_name) %>%
   summarise(
-    t_shows = n(),
     played = sum(actual),
     mean = mean(pred),
     median = median(pred),
     std = sd(pred)
   ) %>%
   ungroup() %>%
-  left_join(sell_sell %>% select(song_name, pred) %>% rename(curr_pred = pred), by = c('song_name')) %>%
+  left_join(sell_sell %>%
+              select(song_name, pred) %>%
+              rename(curr_pred = pred), by = c('song_name')) %>%
   mutate(
     diff_mean = curr_pred - mean,
     diff_median = curr_pred - median,
@@ -43,14 +111,12 @@ keep_overall_cols <- c('song_name', 'pred', 'pct_shows_since_debut', 'pct_shows_
                        'ltp', 'ltp_2', 'ltp_3', 'avg_ltp', 'ltp_diff', 'ltp_ratio',
                        'raw_score', 'raw_run_score', 'overdue_run_metric')
 
-keep_diff_cols <- c('song_name', 'pct_shows_since_debut',
+keep_diff_cols <- c('song_name', 'pred', 'pct_shows_since_debut',
                     'pct_shows_same_state', 'diff_shows_same_state',
                     'pct_shows_same_city', 'pct_shows_same_city',
                     'pct_shows_same_venue', 'pct_shows_same_venue',
                     'pct_shows_same_day', 'pct_shows_same_day',
-                    'pct_shows_same_in_run', 'pct_shows_same_in_run',
-                    'pred'
-                    )
+                    'pct_shows_same_in_run', 'pct_shows_same_in_run')
 
 
 # Pretty Table Function
@@ -88,7 +154,7 @@ build_next_show_table <- function(data = sell_sell, n_preds = 22){
       style = list(
         cell_borders(
           sides = c("right", "left", "bottom"),
-          color = "#BBBBBB",
+          color = "#333F48",
           weight = px(2)
         ),
         cell_text(
@@ -97,7 +163,7 @@ build_next_show_table <- function(data = sell_sell, n_preds = 22){
           color = "white"
         ),
         cell_fill(
-          color = "#2F4985"
+          color = "#BF5700"
         )
       ),
       locations = cells_column_spanners(spanners = c("FREQ", "LTP", "METRICS"))
@@ -109,7 +175,7 @@ build_next_show_table <- function(data = sell_sell, n_preds = 22){
         css(
           text_align = "left",
           font_weight = "bold",
-          border_right = "2px solid #BBBBBB"
+          border_right = "2px solid #333F48"
           )
         )
     ) %>%
@@ -119,7 +185,7 @@ build_next_show_table <- function(data = sell_sell, n_preds = 22){
         css(
           text_align = "center",
           font_weight = "bold",
-          border_right = "2px solid #BBBBBB"
+          border_right = "2px solid #333F48"
         )
       )
     ) %>%
@@ -137,7 +203,7 @@ build_next_show_table <- function(data = sell_sell, n_preds = 22){
       style = list(
         css(
           text_align = "center",
-          border_right = "2px solid #BBBBBB"
+          border_right = "2px solid #333F48"
         )
       )
     ) %>%
@@ -155,7 +221,7 @@ build_next_show_table <- function(data = sell_sell, n_preds = 22){
       style = list(
         css(
           text_align = "center",
-          border_right = "2px solid #BBBBBB"
+          border_right = "2px solid #333F48"
         )
       )
     ) %>%
@@ -201,8 +267,8 @@ build_next_show_table <- function(data = sell_sell, n_preds = 22){
           text_align = "center",
           font_weight = "bold",
           border_bottom = "2px solid black",
-          border_right = "2px solid #BBBBBB",
-          background_color = "#2F4985"
+          border_right = "2px solid #333F48",
+          background_color = "#BF5700"
         )
       )
     ) %>%
@@ -214,7 +280,7 @@ build_next_show_table <- function(data = sell_sell, n_preds = 22){
           text_align = "center",
           font_weight = "bold",
           border_bottom = "2px solid black",
-          border_right = "2px solid #BBBBBB"
+          border_right = "2px solid #333F48"
         )
       )
     ) %>%
@@ -257,20 +323,58 @@ build_next_show_table <- function(data = sell_sell, n_preds = 22){
     tab_options(
       table.border.top.style = "solid",
       table.border.top.width = "3px",
-      table.border.top.color = "#BBBBBB",
+      table.border.top.color = "#333F48",
       table.border.right.style = "solid",
       table.border.right.width = "3px",
-      table.border.right.color = "#BBBBBB",
+      table.border.right.color = "#333F48",
       table.border.bottom.style = "solid",
       table.border.bottom.width = "3px",
-      table.border.bottom.color = "#BBBBBB",
+      table.border.bottom.color = "#333F48",
       table.border.left.style = "solid",
       table.border.left.width = "3px",
-      table.border.left.color = "#BBBBBB",
-      heading.background.color = "#001C5D"
+      table.border.left.color = "#333F48",
+      heading.background.color = "#BF5700"
     )
   
   return(gt_obj)
     
 }
 build_next_show_table()
+
+build_location_table <- function(data = sell_sell, n_preds = 15){
+  show_date <- unique(data$date)
+  show_city <- unique(data$city)
+  show_venue <- unique(data$venue_full)
+  show_state <- unique(data$state)
+  show_sir <- unique(data$show_in_run)
+  
+  lab <- "Widespread Panic Setlist Predictions - Location Data"
+  sub_lab <- paste0("Predictions for ", format(show_date, "%A, %B %d, %Y"), " @ ", show_venue, " (N",show_sir,")")
+  
+  grp_df <- all_song_predictions_df %>%
+    filter(city != "ST. AUGUSTINE") %>%
+    group_by(song_name) %>%
+    summarise(
+      t_shows = n(),
+      played = sum(actual),
+      mean = mean(pred),
+      median = median(pred),
+      std = sd(pred)
+    ) %>%
+    ungroup() %>%
+    left_join(sell_sell %>% select(all_of(keep_diff_cols)) %>% rename(curr_pred = pred), by = c('song_name')) %>%
+    mutate(
+      diff_mean = curr_pred - mean,
+      diff_median = curr_pred - median,
+      stds_above = diff_mean / std,
+      is_2std = if_else(curr_pred > ((2*std) + mean), 1, 0),
+      is_1std = if_else(curr_pred > ((std) + mean), 1, 0)
+    ) %>%
+    arrange(-pct_shows_same_venue) %>%
+    #filter(played > 5 & mean < .07) %>%
+    select(-t_shows, -played, diff_mean, diff_median, std, is_2std, is_1std) %>%
+    head(10) %>%
+    print.data.frame()
+  
+  df <- data %>% select(all_of(keep_diff_cols)) %>% arrange() %>% head(n_preds)
+}

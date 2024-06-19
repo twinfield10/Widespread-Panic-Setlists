@@ -13,7 +13,9 @@ model_data <- readRDS("./Data/WSP_Song_FactTable_1986_to_2024.rds") %>%
   ungroup() %>%
   arrange(show_index, song_index)
 
-model_data %>% group_by(song_name, ftp_date) %>% summarise(cnt = n_distinct(link[state == 'FL' & date >= '2005-12-29'])) %>% tail(20) %>% print.data.frame()
+#model_data %>% group_by(song_name, ftp_date) %>% summarise(cnt = n_distinct(link[state == 'FL' & date >= '2005-12-29'])) %>% tail(20) %>% print.data.frame()
+
+
 # Task 1: Build Tweak Function (Takes Setlist And Pre-Processes Data Into Usable Model Input)
 manipulate_train <- function(test_date = dim_future$date[[1]]){
   

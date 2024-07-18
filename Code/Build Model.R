@@ -1,6 +1,26 @@
 ### LOAD SETLIST DATA FOR MODEL ###
-model_data <- readRDS("./Data/WSP_Song_FactTable_1986_to_2024.rds") %>%
-  left_join(readRDS("./Data/WSP_Dim_Show_Historical_1986_to_2024.rds"), by = c('link')) %>%
+model_dim <- readRDS("./Data/WSP_Dim_Show_Historical_1986_to_2024.rds") %>%
+  rbind(readRDS("./Data/WSP_Dim_Show_Future_2024_to_2024.rds")) %>%
+  filter(is_radio != 1 & is_soundcheck != 1) %>%
+  select(-show_index, -run_index, -show_in_run, -year_index) %>%
+  # Show Index
+  arrange(year, month, day) %>% rowid_to_column('show_index') %>%
+  # Run Index
+  arrange(date, venue_name) %>% group_by(venue_name, run_index = cumsum(c(1, diff(date) != 1))) %>% ungroup() %>%
+  # Show In Run Index
+  arrange(date, run_index) %>% group_by(run_index) %>% mutate(show_in_run  = (show_index -min(show_index))+1) %>% ungroup() %>%
+  arrange(year, show_index) %>% group_by(year) %>% mutate(year_index = row_number()) %>% ungroup() %>%
+  arrange(show_index)
+
+dim_future <- model_dim %>% filter(is_fut == 1) %>% print.data.frame()
+model_dim <- model_dim %>% filter(is_fut == 0)
+
+n_distinct(model_dim$link)
+n_distinct(model_dim$show_index)
+
+
+model_data <- model_dim %>%
+  inner_join(readRDS("./Data/WSP_Song_FactTable_1986_to_2024.rds"), by = c('link')) %>%
   filter(!is.na(date)) %>%
   group_by(song_name) %>%
   mutate(
@@ -12,9 +32,6 @@ model_data <- readRDS("./Data/WSP_Song_FactTable_1986_to_2024.rds") %>%
   ) %>%
   ungroup() %>%
   arrange(show_index, song_index)
-
-#model_data %>% group_by(song_name, ftp_date) %>% summarise(cnt = n_distinct(link[state == 'FL' & date >= '2005-12-29'])) %>% tail(20) %>% print.data.frame()
-
 
 # Task 1: Build Tweak Function (Takes Setlist And Pre-Processes Data Into Usable Model Input)
 manipulate_train <- function(test_date = dim_future$date[[1]]){
@@ -54,7 +71,6 @@ manipulate_train <- function(test_date = dim_future$date[[1]]){
   next_show_index = test_show_index
   next_run_index = test_run_index
   
-  ## BY SHOW
   tot_shows <- n_distinct(df$link)
   tot_shows_last_6_months <- n_distinct(df %>% filter(difftime(test_date, date, units = "days") <= (365/2)) %>% select(link) %>% distinct())
   tot_shows_last_year <- n_distinct(df %>% filter(difftime(test_date, date, units = "days") <= (365)) %>% select(link) %>% distinct())
@@ -74,7 +90,7 @@ manipulate_train <- function(test_date = dim_future$date[[1]]){
   tot_shows_same_day <- n_distinct(df %>% filter(weekday == next_show_day) %>% select(link) %>% distinct())
   
   ## BY RUNS
-  tot_runs <- max(df$run_index)
+  tot_runs <- n_distinct(df$run_index)
   tot_runs_last_6_months <- n_distinct(df %>% filter(difftime(test_date, date, units = "days") <= (365/2)) %>% select(run_index) %>% distinct())
   tot_runs_last_year <- n_distinct(df %>% filter(difftime(test_date, date, units = "days") <= (365)) %>% select(run_index) %>% distinct())
   tot_runs_last_2_years <- n_distinct(df %>% filter(difftime(test_date, date, units = "days") <= (365*2)) %>% select(run_index) %>% distinct())
@@ -117,13 +133,14 @@ manipulate_train <- function(test_date = dim_future$date[[1]]){
       # By Setlist Location
       is_set_1 = ifelse(set == 1, 1, 0),
       is_set_2 = ifelse(set == 2, 1, 0),
-      is_encore = ifelse(set == 99, 1, 0)
+      is_encore = ifelse(set == 99, 1, 0),
+      is_opener = ifelse(song_index == 1, 1, 0)
       ) %>%
     group_by(song_name) %>%
     mutate(
       
       # LTP BY SHOW
-      ltp = (next_show_index - max(show_index)) - sum(inc_shows <= next_show_index & inc_shows >= max(show_index)),
+      ltp = (next_show_index - max(show_index)), - sum(inc_shows <= next_show_index & inc_shows >= max(show_index)),
       ltp_2 = next_show_index - nth(sort(unique(show_index), decreasing = TRUE), 2), 
       ltp_3 = next_show_index - nth(sort(unique(show_index), decreasing = TRUE), 3),
       ltp_4 = next_show_index - nth(sort(unique(show_index), decreasing = TRUE), 4),
@@ -149,51 +166,52 @@ manipulate_train <- function(test_date = dim_future$date[[1]]){
     )  %>%
     summarise(
       ftp = max(ftp_date),
-      ### TOTAL COUNTS SINCE DEBUT - Will Change Percentages###
+      ### TOTAL COUNTS SINCE DEBUT - Will Change Percentages ###
       tot_shows_since_debut = next_show_index - min(ftp_show),
       tot_runs_since_debut = next_run_index - min(ftp_run),
       
-      #tot_shows_same_city = sum(is_same_city == 1 & show_index >= ftp_show),
-      #tot_shows_same_venue = sum(is_same_venue == 1 & show_index >= ftp_show),
-      #tot_shows_same_day = sum(is_same_day == 1 & show_index >= ftp_show),
+      #tot_shows_same_city = n_distinct(link[is_same_city == 1 & show_index >= ftp_show]),
+      #tot_shows_same_venue = n_distinct(link[is_same_venue == 1 & show_index >= ftp_show]),
+      #tot_shows_same_day = n_distinct(link[is_same_day == 1 & show_index >= ftp_show]),
       
-      #tot_runs_same_state = sum(is_same_state == 1 & run_index >= ftp_run),
-      #tot_runs_same_city = sum(ifelse(run_index >= min(ftp_run), n_distinct(run_index) * is_same_city, 0)),
-      #tot_runs_same_venue = sum(ifelse(run_index >= min(ftp_run), n_distinct(run_index) * is_same_venue, 0)),
-      #tot_runs_same_day = sum(ifelse(run_index >= min(ftp_run), n_distinct(run_index) * is_same_day, 0)),
+      #tot_runs_same_state = n_distinct(run_index[is_same_state == 1 & run_index >= ftp_run]),
+      #tot_runs_same_city = n_distinct(run_index[is_same_city == 1 & run_index >= ftp_run]),
+      #tot_runs_same_venue = n_distinct(run_index[is_same_venue == 1 & run_index >= ftp_run]),
+      #tot_runs_same_day = n_distinct(run_index[is_same_day == 1 & run_index >= ftp_run]),
       
-      #tot_shows_same_in_run = sum(is_same_in_run[show_index >= min(ftp_show)]),
-      #tot_shows_same_day_in_run = sum(is_same_day_in_run[show_index >= min(ftp_show)]),
+      #tot_shows_same_in_run = n_distinct(run_index[is_same_in_run == 1 & run_index >= ftp_run]),
+      #tot_shows_same_day_in_run = n_distinct(run_index[is_same_day_in_run == 1 & run_index >= ftp_run]),
 
       
       ## SHOWS
       
       # Time
       n_shows_all_time = n_distinct(link),
-      n_shows_last_6_months = sum(is_last_6_months),
-      n_shows_last_year = sum(is_last_year),
-      n_shows_last_2_years = sum(is_last_2_years),
-      n_shows_last_4_years = sum(is_last_4_years),
-      n_shows_last_10_years = sum(is_last_10_years),
+      n_shows_last_6_months =  n_distinct(link[is_last_6_months == 1]),
+      n_shows_last_year = n_distinct(link[is_last_year == 1]),
+      n_shows_last_2_years = n_distinct(link[is_last_2_years == 1]),
+      n_shows_last_4_years = n_distinct(link[is_last_4_years == 1]),
+      n_shows_last_10_years = n_distinct(link[is_last_10_years == 1]),
       
       # Guitarist
-      n_shows_mikey_years = sum(is_mikey_show),
-      n_shows_jimmy_years = sum(is_jimmy_show),
+      n_shows_mikey_years = n_distinct(link[is_mikey_show == 1]),
+      n_shows_jimmy_years = n_distinct(link[is_jimmy_show == 1]),
       
       # Location
-      n_shows_same_state = sum(is_same_state),
-      n_shows_same_city = sum(is_same_city),
-      n_shows_same_venue = sum(is_same_venue),
+      n_shows_same_state = n_distinct(link[is_same_state == 1]),
+      n_shows_same_city = n_distinct(link[is_same_city == 1]),
+      n_shows_same_venue = n_distinct(link[is_same_venue == 1]),
       
       # Day
-      n_shows_same_day = sum(is_same_day),
-      n_shows_same_in_run = sum(is_same_in_run),
-      n_shows_same_day_in_run = sum(is_same_day_in_run),
+      n_shows_same_day = n_distinct(link[is_same_day == 1]),
+      n_shows_same_in_run = n_distinct(link[is_same_in_run == 1]),
+      n_shows_same_day_in_run = n_distinct(link[is_same_day_in_run == 1]),
       
       # Setlist Location
-      n_shows_set_1 = sum(is_set_1),
-      n_shows_set_2 = sum(is_set_2),
-      n_shows_encore = sum(is_encore),
+      n_shows_set_1 = n_distinct(link[is_set_1 == 1]),
+      n_shows_set_2 = n_distinct(link[is_set_2 == 1]),
+      n_shows_encore = n_distinct(link[is_encore == 1]),
+      n_shows_opener = n_distinct(link[is_opener == 1]),
 
       ## RUNS
       
@@ -244,6 +262,7 @@ manipulate_train <- function(test_date = dim_future$date[[1]]){
       pct_shows_set_1 = n_shows_set_1 / n_shows_all_time,
       pct_shows_set_2 = n_shows_set_2 / n_shows_all_time,
       pct_shows_encore = n_shows_encore / n_shows_all_time,
+      pct_shows_opener = n_shows_opener / n_shows_all_time,
       
       ## RUNS ##
       
@@ -274,26 +293,26 @@ manipulate_train <- function(test_date = dim_future$date[[1]]){
       diff_jimmy_mikey_shows = pct_shows_jimmy_years - pct_shows_mikey_years,
       
       # Location
-      diff_shows_same_state = pct_shows_same_state - pct_shows_since_debut,
-      diff_shows_same_city = pct_shows_same_city - pct_shows_since_debut,
-      diff_shows_same_venue = pct_shows_same_venue - pct_shows_since_debut,
+      diff_shows_same_state = pct_shows_same_state - pct_shows_all_time,
+      diff_shows_same_city = pct_shows_same_city - pct_shows_all_time,
+      diff_shows_same_venue = pct_shows_same_venue - pct_shows_all_time,
       diff_recent_shows_same_state = pct_shows_same_state - pct_shows_last_10_years,
       diff_recent_shows_same_city = pct_shows_same_city - pct_shows_last_10_years,
       diff_recent_shows_same_venue = pct_shows_same_venue - pct_shows_last_10_years,
       
-      diff_runs_same_state = pct_runs_same_state - pct_runs_since_debut,
-      diff_runs_same_city = pct_runs_same_city - pct_runs_since_debut,
-      diff_runs_same_venue = pct_runs_same_venue - pct_runs_since_debut,
+      diff_runs_same_state = pct_runs_same_state - pct_runs_all_time,
+      diff_runs_same_city = pct_runs_same_city - pct_runs_all_time,
+      diff_runs_same_venue = pct_runs_same_venue - pct_runs_all_time,
       diff_recent_runs_same_state = pct_runs_same_state - pct_runs_last_10_years,
       diff_recent_runs_same_city = pct_runs_same_city - pct_runs_last_10_years,
       diff_recent_runs_same_venue = pct_runs_same_venue - pct_runs_last_10_years,
       
       # Day
-      diff_shows_same_day = pct_shows_same_day - pct_shows_since_debut,
+      diff_shows_same_day = pct_shows_same_day - pct_shows_all_time,
       diff_recent_shows_same_day = pct_shows_same_day - pct_shows_last_10_years,
-      diff_shows_same_in_run = pct_shows_same_in_run - pct_shows_since_debut,
+      diff_shows_same_in_run = pct_shows_same_in_run - pct_shows_all_time,
       diff_recent_shows_same_in_run = pct_shows_same_in_run - pct_shows_last_10_years,
-      diff_shows_same_day_in_run = pct_shows_same_day_in_run - pct_shows_since_debut,
+      diff_shows_same_day_in_run = pct_shows_same_day_in_run - pct_shows_all_time,
       diff_recent_shows_same_day_in_run = pct_shows_same_day_in_run - pct_shows_last_10_years,
       
       ### NORMALIZE LTP###
@@ -453,11 +472,11 @@ model_table <- create_train_set()
 
 
 ## BUILD MODEL:
-
+set.seed(87)
 ## Option 1: Loop Mini Models ##
 # Task 1: Function For Building and Testing Model + Metrics
-build_model <- function(test_dte, n_shows = 250, rounds = 250, m_depth = 7, rt = 0.05){
-  set.seed(87)
+build_model <- function(test_dte, n_shows = 400, rounds = 250, m_depth = 7, rt = 0.05){
+  
   ## Pre-Processing ##
   # Split
   test_data <- model_table %>% filter(date == test_dte)
@@ -555,6 +574,8 @@ build_model <- function(test_dte, n_shows = 250, rounds = 250, m_depth = 7, rt =
   
   model_predictions$city <- city_index
   
+  gc()
+  
   
   return(list(metrics_df, model_predictions))
   
@@ -564,10 +585,10 @@ build_model <- function(test_dte, n_shows = 250, rounds = 250, m_depth = 7, rt =
 # Produces Two Outputs In General Envrionment (acc_metrics)
   # Model Accuracy Metrics For Each DataFrame (all_song_predictions_df)
   # Setlist of Predictions and Actual For Each Show Tested
-loop_model <- function(yrs = c(2021, 2022, 2023, 2024)){
+loop_model <- function(test_shows = 10){
   
   # Get Test Dates #
-  test_dates <- model_table %>% select(date) %>% filter(year(date) %in% yrs) %>% unique() %>% arrange(desc(date)) %>% pull()
+  test_dates <- model_table %>% select(date) %>% arrange(desc(date)) %>% unique() %>% head(test_shows) %>% pull()
   metrics_list_dfs <- c()
   predict_songs_dfs <- c()
   
@@ -670,7 +691,7 @@ evaluate_model <- function(data = all_song_predictions_df){
 evaluate_model()
 
 # Task 3: "Apply" Model To Next Show Incorporating X Most Recent Shows
-make_predictions <- function(data = sell_sell_table){
+make_predictions <- function(data = sell_sell_table, target_var = 'played'){
   ## Pre-Processing ##
   
   # Split
@@ -683,12 +704,12 @@ make_predictions <- function(data = sell_sell_table){
   city_index <- test_data$city[[1]]
   
   # Features And Targets
-  features <- names(train_data)[!names(train_data) %in% c("played", "city", "date", "venue_full", "song_name", "show_index")] #
   target <- "played"
-  
+  features <- names(train_data)[!names(train_data) %in% c("played", "city", "date", "venue_full", "song_name", "show_index")] #
+
   ## TRAIN ##
   
-  # Train the xgboost model
+  # Train the Setlist Prediction xgboost Model
   xgb_model <- xgboost(data = as.matrix(train_data[, features]),
                        label = as.numeric(train_data[[target]]),
                        objective = "binary:logistic",
@@ -714,16 +735,31 @@ make_predictions <- function(data = sell_sell_table){
   prediction_df_test <- prediction_df_test %>%
     left_join(data, by = c('date', 'city', 'song_name'))
   
+  ## Train + Predict Opener
+  
+  
   return(prediction_df_test)
   
 
 }
 sell_sell <- make_predictions(data = manipulate_train(dim_future$date[[1]])) %>% arrange(desc(pred))
 
+STONES <- make_predictions(data = manipulate_train("2024-06-20")) %>% arrange(desc(pred))
+RRX_N1 <- make_predictions(data = manipulate_train("2024-06-21")) %>% arrange(desc(pred))
+RRX_N2 <- make_predictions(data = manipulate_train("2024-06-22")) %>% arrange(desc(pred))
+RRX_N3 <- make_predictions(data = manipulate_train("2024-06-23")) %>% arrange(desc(pred))
+
 
 # Save Tables
 all_song_predictions_df <- all_song_predictions_df %>% select(date, city, song_name, pred, actual, optimal_pred) %>%
   left_join(model_table, by = c('date', 'city', 'song_name'))
+
+sell_sell_table %>%
+  select(song_name, pct_shows_opener, n_shows_opener) %>%
+  filter(n_shows_opener <= 1) %>%
+  arrange(-pct_shows_opener) %>%
+  head(10) %>%
+  print.data.frame()
 
 # Save - 2021-2024 Song Prediction
 write_rds(all_song_predictions_df, "./Data/SongPredictions.rds")
@@ -732,5 +768,11 @@ write_csv(all_song_predictions_df, "./Data/SongPredictions.csv")
 # Save - Accuracy Metrics
 write_rds(acc_metrics, "./Data/AccuracyMetrics.rds")
 write_csv(acc_metrics, "./Data/AccuracyMetrics.csv")
+
+# Save - Single Show
+write_csv(STONES, "./Data/Predictions/RRX_2024/N0_20240620.csv")
+write_csv(RRX_N1, "./Data/Predictions/RRX_2024/N1_20240621.csv")
+write_csv(RRX_N2, "./Data/Predictions/RRX_2024/N2_20240622.csv")
+write_csv(RRX_N3, "./Data/Predictions/RRX_2024/N3_20240623.csv")
 
 

@@ -10,9 +10,11 @@ library(xgboost)
 library(pROC)
 library(caret)
 library(Metrics)
+
 # Plotting
 library(ggplot2)
-`%notin%` <- Negate(`%in%`)
+library(gt)
+library(paletteer)
 
 ###################################
 ## DEFINE LOAD + CLEAN FUNCTIONS ##
@@ -345,6 +347,7 @@ process_setlist <- function(setlist_link) {
     
     return(songs)
 }
+
 # Functions 1: Load All Show Information via EveryDayCompanion
 load_all_data <- function(start = 1986 , end = 2024) {
   
@@ -363,14 +366,10 @@ load_all_data <- function(start = 1986 , end = 2024) {
   start_time <- Sys.time()
   
   # Historical Song
-  #prev_song <- readRDS("./Data/WSP_Song_FactTable_1986_to_2024.rds") %>% filter(link != "http://everydaycompanion.com/setlists/20240525a.asp")
-  #load_links <- show_dim %>% filter(year >= 2024 & link %notin% unique(prev_song$link)) %>% pull(link) %>% unique()
-  
-  #update_songs <- map_dfr(load_links, process_setlist)
   songs <- map_dfr(show_dim$link, process_setlist)
   
   # Songs
-  songs <-  songs %>% #
+  songs <-  songs %>%
     mutate(
       song_note_detail = if_else(song_note_detail == "", NA, song_note_detail),
       show_notes = if_else(show_notes == "", NA, show_notes),
@@ -389,8 +388,6 @@ load_all_data <- function(start = 1986 , end = 2024) {
     ungroup() %>%
     select(link, set, song_index, song_name, into, song_note_detail, show_notes)
   
-  #all_songs <- rbind(prev_song, songs)
-  
   dim_songs <- songs %>%
     group_by(link, show_notes) %>%
     mutate(n_songs = max(song_index)) %>%
@@ -398,10 +395,14 @@ load_all_data <- function(start = 1986 , end = 2024) {
     select(link, show_notes, n_songs) %>%
     unique()
   
+  songs <- songs %>% select(-show_notes)
+  
   # Show Information
   # Slim Future
   Slim_Fut <- fut_dim %>%
     mutate(
+      is_soundcheck = 0,
+      is_opening_act = 0,
       show_notes = "",
       n_songs = 0,
       weekday = weekdays(date),
@@ -428,6 +429,10 @@ load_all_data <- function(start = 1986 , end = 2024) {
         grepl("\\[Soundcheck; ", show_notes) ~ 1,
         TRUE ~ 0
       ),
+      is_opening_act = case_when(
+        str_detect(tolower(show_notes), "opened for") ~ 1,
+        TRUE ~ 0
+      ),
       weekday = weekdays(date),
       is_fut = 0
     ) %>%
@@ -437,19 +442,7 @@ load_all_data <- function(start = 1986 , end = 2024) {
       show_notes = if_else(is.na(show_notes), "", show_notes)
     ) %>%
     arrange(show_index) %>%
-    filter(is_soundcheck != 1 & is_radio != 1) %>%
-    select(-c(is_soundcheck)) %>%
-    rbind(Slim_Fut) #%>%
-    # Show Index
-    #mutate(show_index = row_number()) %>% arrange(show_index) %>%
-    # Year Index
-    #group_by(year) %>% mutate(year_index = row_number()) %>% ungroup() %>%
-    # Run Index
-    #mutate(run_index = 1 + cumsum(
-    #  venue_full != lag(venue_full, default = first(venue_full)) |
-    #    date != lag(date + 1, default = first(date)))) %>% arrange(show_index) %>%
-    # Show In Run
-    #group_by(run_index) %>% mutate(show_in_run  = (show_index -min(show_index))+1) %>% ungroup()
+    rbind(Slim_Fut)
     
   
   end_time <- Sys.time()
@@ -463,7 +456,144 @@ load_all_data <- function(start = 1986 , end = 2024) {
   # Return
   return(ret_list)
 }
+
+# Function 2: Update Most Recent Shows
+update_all_data <- function(){
+  # Load Previous Data
+  song_path <- './Data/WSP_Song_FactTable_1986_to_2024.rds'
+  dim_hist_path <- './Data/WSP_Dim_Show_Historical_1986_to_2024.rds'
+  dim_fut_path <- './Data/WSP_Dim_Show_Future_2024_to_2024.rds'
+  
+  prev_dim_hist <- readRDS('./Data/WSP_Dim_Show_Historical_1986_to_2024.rds')
+  prev_dim_fut <- readRDS(dim_fut_path)
+  
+  
+  # Set Up Dim For Update
+  last_show = max(prev_dim_hist$date)
+  tour_data <- process_dim(st_yr = 1986, end_yr = 2024)
+  
+  update_dim <- tour_data %>% filter(date < Sys.Date() & date > last_show)
+  fut_dim <- tour_data %>% filter(date >= Sys.Date())
+  
+  if(nrow(update_dim) == 0){
+    print("All Historical Shows Up to Date")
+    return(list(readRDS(song_path),
+                readRDS(dim_hist_path),
+                fut_dim)
+    )
+    
+  } else {
+    # Peek
+    print(paste0("Now Updating ", length(update_dim$date)," Shows | ", length(fut_dim$date)," Future Shows And EDC Links Loaded - Now Loading Setlists"))
+    print(update_dim %>% arrange(-show_index) %>% head())
+    
+    # Load Setlists
+    start_time <- Sys.time()
+    prev_song <- readRDS(song_path)
+    load_links <- update_dim %>% filter(date > last_show & link %notin% unique(prev_song$link)) %>% pull(link) %>% unique()
+    update_songs <- map_dfr(load_links, process_setlist)
+    
+    # Manipulate Setlists
+    # Songs
+    songs <-  update_songs %>%
+      mutate(
+        song_note_detail = if_else(song_note_detail == "", NA, song_note_detail),
+        show_notes = if_else(show_notes == "", NA, show_notes),
+        set_num = case_when(
+          set == 'E' ~ "99",
+          TRUE ~ set
+        ),
+        set = as.numeric(set_num)
+      ) %>%
+      group_by(link) %>%
+      mutate(
+        min_set = min(as.numeric(set)),
+        max_set = max(as.numeric(set)),
+        set = if_else(set == 0 & min_set == 0 & max_set %in% c(99,0), 1, set)
+      ) %>%
+      ungroup() %>%
+      select(link, set, song_index, song_name, into, song_note_detail, show_notes)
+    
+    dim_songs <- songs %>%
+      group_by(link, show_notes) %>%
+      mutate(n_songs = max(song_index)) %>%
+      ungroup() %>%
+      select(link, show_notes, n_songs) %>%
+      unique()
+    
+    all_songs <- rbind(prev_song, songs %>% select(-show_notes))
+    
+    # Slim Future
+    Slim_Fut <- fut_dim %>%
+      mutate(
+        is_soundcheck = 0,
+        is_opening_act = 0,
+        show_notes = "",
+        n_songs = 0,
+        weekday = weekdays(date),
+        is_fut = 1
+      ) %>%
+      arrange(date)
+    
+    new_dim <- update_dim %>%
+      left_join(dim_songs, by = 'link') %>%
+      mutate(
+        is_radio = case_when(
+          grepl("\\b\\d+\\.\\d+FM\\b", venue_full) ~ 1,
+          grepl("\\b\\d+\\.\\d\\b", venue_full) ~ 1,
+          grepl("NBC STUDIOS", venue_full) ~ 1,
+          grepl("ED SULLIVAN THEATER", venue_full) ~ 1,
+          grepl("STUDIO 6B, ROCKAFELLER CENTER", venue_full) ~ 1,
+          grepl("CNN STUDIOS", venue_full) ~ 1,
+          grepl(" STUDIO", venue_full) ~ 1,
+          grepl(" RECORD", venue_full) ~ 1,
+          TRUE ~ 0
+        ),
+        is_soundcheck = case_when(
+          grepl("\\[Soundcheck; ", show_notes) ~ 1,
+          TRUE ~ 0
+        ),
+        is_opening_act = case_when(
+          str_detect(tolower(show_notes), "opened for") ~ 1,
+          TRUE ~ 0
+        ),
+        weekday = weekdays(date),
+        is_fut = 0
+      ) %>%
+      arrange(show_index) %>%
+      mutate(
+        n_songs = if_else(is.na(n_songs), 0, n_songs),
+        show_notes = if_else(is.na(show_notes), "", show_notes)
+      ) %>%
+      arrange(show_index)
+    
+    dim <- rbind(prev_dim_hist, new_dim, Slim_Fut)
+    
+    
+    end_time <- Sys.time()
+    elapsed_time <- as.numeric(difftime(end_time, start_time, units = "mins"))
+    print(paste0('Successfully Updated ',length(unique(new_dim$link)),' Widespread Panic Shows (', nrow(songs),' Total Songs) in ', round(elapsed_time, 2),' Minutes From ', min(new_dim$date), ' to ', max(new_dim$date)))
+    
+    ret_list <- list(all_songs,
+                     dim %>% filter(is_fut == 0),
+                     dim %>% filter(is_fut == 1)
+    )
+    # Return
+    return(ret_list)
+  }
+  
+  
+}
+
+
+## Run:
+# Load All From Scratch
 data_list <- load_all_data(start = 1986, end = 2024)
+
+# Update Setlist Data
+data_list <- update_all_data()
+
+
 # Create Tables
 fact_song <- data_list[[1]]
 dim_historical <- data_list[[2]]
@@ -474,8 +604,6 @@ dim_all <- rbind(dim_historical, dim_future)
 saveRDS(fact_song, file = paste0("./Data/WSP_Song_FactTable_", min(as.numeric(substr(fact_song$link, 39,42))),  "_to_", max(as.numeric(substr(fact_song$link, 39,42))), ".rds"))
 saveRDS(dim_historical, file = paste0("./Data/WSP_Dim_Show_Historical_", min(as.numeric(substr(dim_historical$link, 39,42))),  "_to_", max(as.numeric(substr(dim_historical$link, 39,42))), ".rds"))
 saveRDS(dim_future, file = paste0("./Data/WSP_Dim_Show_Future_", min(as.numeric(substr(dim_future$link, 39,42))),  "_to_", max(as.numeric(substr(dim_future$link, 39,42))), ".rds"))
-
-
 
 
 

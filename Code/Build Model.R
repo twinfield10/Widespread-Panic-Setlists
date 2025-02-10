@@ -1,39 +1,65 @@
-### LOAD SETLIST DATA FOR MODEL ###
-model_dim <- readRDS("./Data/WSP_Dim_Show_Historical_1986_to_2024.rds") %>%
-  rbind(readRDS("./Data/WSP_Dim_Show_Future_2024_to_2024.rds")) %>%
-  filter(is_radio != 1 & is_soundcheck != 1) %>%
-  select(-show_index, -run_index, -show_in_run, -year_index) %>%
-  # Show Index
-  arrange(year, month, day) %>% rowid_to_column('show_index') %>%
-  # Run Index
-  arrange(date, venue_name) %>% group_by(venue_name, run_index = cumsum(c(1, diff(date) != 1))) %>% ungroup() %>%
-  # Show In Run Index
-  arrange(date, run_index) %>% group_by(run_index) %>% mutate(show_in_run  = (show_index -min(show_index))+1) %>% ungroup() %>%
-  arrange(year, show_index) %>% group_by(year) %>% mutate(year_index = row_number()) %>% ungroup() %>%
-  arrange(show_index)
+### PREPROCESS DATA ###
+set.seed(87)
 
-dim_future <- model_dim %>% filter(is_fut == 1) %>% print.data.frame()
-model_dim <- model_dim %>% filter(is_fut == 0)
+### 1) Load + Re-Index Shows ###
+prep_model_input <- function(df = dim_all, song_df = fact_song){
+  
+  # Re-Index Show/Run/ShowInRun
+  model_dim <- df %>%
+    filter(is_radio != 1 & is_soundcheck != 1) %>%
+    select(-show_index, -run_index, -show_in_run, -year_index) %>%
+    # Show Index
+    arrange(year, month, day) %>% rowid_to_column('show_index') %>%
+    # Run Index
+    arrange(date, venue_name) %>% group_by(venue_name, run_index = cumsum(c(1, diff(date) != 1))) %>% ungroup() %>%
+    # Show In Run Index
+    arrange(date, run_index) %>% group_by(run_index) %>% mutate(show_in_run  = (show_index -min(show_index))+1) %>% ungroup() %>%
+    arrange(year, show_index) %>% group_by(year) %>% mutate(year_index = row_number()) %>% ungroup() %>%
+    arrange(show_index)
+  
+  # Tables To Global Env
+  dim_future <<- model_dim %>% filter(is_fut == 1) %>% print.data.frame()
+  model_dim <<- model_dim %>% filter(is_fut == 0)
+  
+  # Check Counts
+  dist_links = n_distinct(model_dim$link)
+  dist_idx  =  n_distinct(model_dim$show_index)
+  if(dist_links == dist_idx){
+    print(paste0(dist_idx, " Distinct Shows in Model Input Table (model_dim)"))
+  } else {
+    print("Links and Show Index Not Equal")
+    print(paste0(dist_links, " Distinct Links"))
+    print(paste0(dist_idx, " Distinct Show Indicies"))
+  }
+  
+  model_data <<- model_dim %>%
+    inner_join(song_df, by = c('link')) %>%
+    filter(!is.na(date)) %>%
+    group_by(song_name) %>%
+    mutate(
+      ftp_date = min(date),
+      ftp_show = min(show_index),
+      ftp_run = min(run_index),
+      ftp_city = city[which.min(date)],
+      ftp_venue = venue_full[which.min(date)]
+    ) %>%
+    ungroup() %>%
+    arrange(show_index, song_index)
+  
+}
+prep_model_input(
+  df = readRDS("./Data/WSP_Show_Dim_Table_1986_to_2025.rds"),
+  song_df = readRDS("./Data/WSP_Song_Fact_Table_1986_to_2025.rds")
+)
+# Output:
+# model_data - Table combining show info and setlists that will be used for train data
+# model_dim - Table containing info about historical shows 
+# dim_future - Table containing info about upcoming shows
 
-n_distinct(model_dim$link)
-n_distinct(model_dim$show_index)
-
-
-model_data <- model_dim %>%
-  inner_join(readRDS("./Data/WSP_Song_FactTable_1986_to_2024.rds"), by = c('link')) %>%
-  filter(!is.na(date)) %>%
-  group_by(song_name) %>%
-  mutate(
-    ftp_date = min(date),
-    ftp_show = min(show_index),
-    ftp_run = min(run_index),
-    ftp_city = city[which.min(date)],
-    ftp_venue = venue_full[which.min(date)]
-  ) %>%
-  ungroup() %>%
-  arrange(show_index, song_index)
-
-# Task 1: Build Tweak Function (Takes Setlist And Pre-Processes Data Into Usable Model Input)
+### 2) Manipulate Data To Create Input Tables ###
+# a)  Function: Create Input Table For Single Show
+    # Input: Date
+    # Output: DataFrame of Songs and Song Stats as of input date
 manipulate_train <- function(test_date = dim_future$date[[1]]){
   
   # Create Show-Specific Variables
@@ -140,7 +166,7 @@ manipulate_train <- function(test_date = dim_future$date[[1]]){
     mutate(
       
       # LTP BY SHOW
-      ltp = (next_show_index - max(show_index)), - sum(inc_shows <= next_show_index & inc_shows >= max(show_index)),
+      ltp = (next_show_index - max(show_index)),
       ltp_2 = next_show_index - nth(sort(unique(show_index), decreasing = TRUE), 2), 
       ltp_3 = next_show_index - nth(sort(unique(show_index), decreasing = TRUE), 3),
       ltp_4 = next_show_index - nth(sort(unique(show_index), decreasing = TRUE), 4),
@@ -150,6 +176,7 @@ manipulate_train <- function(test_date = dim_future$date[[1]]){
       ltp_8 = next_show_index - nth(sort(unique(show_index), decreasing = TRUE), 8),
       ltp_9 = next_show_index - nth(sort(unique(show_index), decreasing = TRUE), 9),
       ltp_10= next_show_index - nth(sort(unique(show_index), decreasing = TRUE), 10),
+      across(starts_with('ltp_'), ~ if_else(is.na(.), next_show_index, .)),
     
       # LTP BY RUN
       
@@ -162,7 +189,8 @@ manipulate_train <- function(test_date = dim_future$date[[1]]){
       ltp_7_run = next_run_index - nth(sort(unique(run_index), decreasing = TRUE), 7),
       ltp_8_run = next_run_index - nth(sort(unique(run_index), decreasing = TRUE), 8),
       ltp_9_run = next_run_index - nth(sort(unique(run_index), decreasing = TRUE), 9),
-      ltp_10_run =next_run_index - nth(sort(unique(run_index), decreasing = TRUE), 10)
+      ltp_10_run =next_run_index - nth(sort(unique(run_index), decreasing = TRUE), 10),
+      across(starts_with('ltp_') & ends_with('_run'), ~ if_else(is.na(.), next_run_index, .)),
     )  %>%
     summarise(
       ftp = max(ftp_date),
@@ -278,6 +306,9 @@ manipulate_train <- function(test_date = dim_future$date[[1]]){
       pct_runs_same_state = n_runs_same_state / tot_runs_same_state,
       pct_runs_same_city = n_runs_same_city / tot_runs_same_city,
       pct_runs_same_venue = n_runs_same_venue / tot_runs_same_venue,
+      
+      # Fill NA
+      across(starts_with('pct_'), ~ if_else(is.na(.), 0, .)),
       
       ### DIFFERENCES IN PERCENT ###
       
@@ -436,343 +467,969 @@ manipulate_train <- function(test_date = dim_future$date[[1]]){
   
   return(eligible_songs)
 }
-# Task 2: Create Model Input File For Next Show (Best one of the year):
+
+# b) Apply manipulate_train for next show (i.e., Model Test Data)
 sell_sell_table <- manipulate_train()
 
-# Task 3: Create Model Input Files For Last X Shows To Test Model:
+# c) Apply manipulate_train for previous n shows to use as Train Data
 create_train_set <- function(end_date = max(model_data$date), train_n = 500){
   start_time <- Sys.time()
+  
   # Get Train/Test Date List
-  train_dates <- model_data %>% filter(date <= end_date) %>% select(date) %>% arrange(desc(date)) %>% unique() %>% head(train_n) %>% pull()
-  print(paste0("Now Loading ", train_n, " Concerts From ", train_dates[[1]]," to ", train_dates[[length(train_dates)]], " At ", format(Sys.time(), "%H:%M:%S")))
+  train_dates <- model_data %>%
+    filter(date <= end_date) %>%
+    distinct(date) %>%
+    arrange(desc(date)) %>%
+    slice_head(n = train_n) %>%
+    pull(date)
   
-  list_of_dfs <- c()
+  # Print Start TIme
+  print(
+    paste0(
+      "Now Loading ",
+      train_n,
+      " Concerts From ",
+      train_dates[[1]],
+      " to ",
+      train_dates[[length(train_dates)]],
+      " At ",
+      format(Sys.time(),"%H:%M:%S")
+      )
+    )
   
-  # Create Loop?
-  for(i in 1:length(train_dates)){
-    predict_table <- manipulate_train(test_date = train_dates[i]) %>% filter(ftp < train_dates[i])
+  # List of Train Sets
+  list_of_dfs <- map(train_dates, function(train_date) {
+    predict_table <- manipulate_train(test_date = train_date) %>%
+      filter(ftp < train_date)
     
-    setlist <- model_data %>% filter(date == train_dates[i]) %>% select(song_name) %>% unique() %>% pull()
+    setlist <- model_data %>%
+      filter(date == train_date) %>%
+      distinct(song_name) %>%
+      pull(song_name)
     
-    final_tbl <- predict_table %>% mutate(played = if_else(song_name %in% setlist, 1, 0)) %>% select(-ftp)
-    
-    list_of_dfs[[i]] <- final_tbl
-  }
+    predict_table %>%
+      mutate(played = as.integer(song_name %in% setlist)) %>%
+      select(-ftp)
+  })
   
   train_table <- bind_rows(list_of_dfs)
   
   end_time <- Sys.time()
   elapsed_time <- as.numeric(difftime(end_time, start_time, units = "mins"))
-  print(paste0("Loading of ", train_n, " Concerts From ", train_dates[[1]]," to ", train_dates[[length(train_dates)]], " Completed in ", round(elapsed_time, 2)," Minutes"))
+  print(paste0("Loading of ", train_n, " Concerts From ", train_dates[[1]],
+               " to ", train_dates[[length(train_dates)]],
+               " Completed in ", round(elapsed_time, 2)," Minutes"))
 
   return(train_table)
   
 }
 model_table <- create_train_set()
 
-
-## BUILD MODEL:
-set.seed(87)
-## Option 1: Loop Mini Models ##
-# Task 1: Function For Building and Testing Model + Metrics
-build_model <- function(test_dte, n_shows = 400, rounds = 250, m_depth = 7, rt = 0.05){
+### TRAIN MODEL - NO HYPERTUNING ###
+train_model <- function(input = model_table, resample = TRUE){
   
-  ## Pre-Processing ##
-  # Split
-  test_data <- model_table %>% filter(date == test_dte)
-  train_data <- model_table %>% filter(date < test_dte & show_index >= (test_data$show_index[[1]] - n_shows))
-  filt_dates <- train_data %>% select(date) %>% filter(date < test_dte) %>% arrange(date) %>% unique() %>% pull()
-
+  # Separate Columns
+  target <- 'played'
+  id_cols <- c('song_name', 'show_index', 'city', 'date', 'venue_full')
+  feature_cols <- setdiff(names(input), c(target, id_cols))
   
-  # Keep Indicies
-  song_index <- test_data$song_name
-  date_index <- test_data$date
-  city_index <- test_data$city
+  # Remove Inf
+  input <- input %>% filter(!is.infinite(pct_runs_since_debut))
   
-  # Features And Targets
-  features <- names(train_data)[!names(train_data) %in% c("played", "city", "date", "venue_full", "song_name", "show_index")]
-  target <- "played"
-  
-  ## TRAIN ##
-  
-  # Train the xgboost model
-  xgb_model <- xgboost(data = as.matrix(train_data[, features]),
-                       label = as.numeric(train_data[[target]]),
-                       objective = "binary:logistic",
-                       eval.metric = 'logloss',
-                       max.depth=m_depth,
-                       nrounds = rounds,
-                       eta = rt,
-                       verbose = 0)
-  
-  ## PREDICT ##
-  
-  pred_vec <- predict(xgb_model, as.matrix(test_data[, features]))
-  
-  model_predictions <<- data.frame(
-    date = date_index,
-    city = city_index,
-    song_name = song_index,
-    pred = pred_vec,
-    actual = test_data[[target]]
-    ) %>%
-    arrange(desc(pred), desc(actual))
+  # Build Input Vectors
+  input <- if(resample == TRUE){
+    input$played <- as.factor(input$played)
+    smote(played ~ ., input %>% select(all_of(feature_cols), played), perc.over = 2, k = 5, perc.under = 2)
+  } else {
+    input
+  }
 
   
-  ## METRICS ##
+  X <- input %>%
+    select(all_of(feature_cols)) %>%
+    as.matrix()
+  y <- as.numeric(as.character(input[[target]]))
   
-  feature_importance <- xgb.importance(feature_names = features, model = xgb_model)
-  top_features <- feature_importance %>% head(25)
+  # Split into Train/Test
+  train_index <- sample(seq_len(nrow(input)), size = 0.8 * nrow(input))
+  X_train <- X[train_index, ]
+  X_test  <- X[-train_index, ]
+  y_train <- y[train_index]
+  y_test  <- y[-train_index]
   
-  model_predictions <- model_predictions %>% mutate(optimal_pred = ifelse(dense_rank(desc(pred)) <= 22, 1, 0))
-  confusion_matrix <- table(Actual = model_predictions$actual, Predicted = model_predictions$optimal_pred)
-  print(confusion_matrix)
+  dtrain <- xgb.DMatrix(data = X_train, label = y_train)
+  dtest  <- xgb.DMatrix(data = X_test, label = y_test)
   
-  acc <- mean(model_predictions$optimal_pred == model_predictions$actual)
-  prec <- sum(model_predictions$optimal_pred == 1 & model_predictions$actual == 1) / sum(model_predictions$optimal_pred == 1)
-  recall <- sum(model_predictions$optimal_pred == 1 & model_predictions$actual == 1) / sum(model_predictions$actual == 1)
-  f1_score <- 2 * prec * recall / (prec + recall)
-  roc_curve <- pROC::roc(model_predictions$actual, model_predictions$optimal_pred, quiet = TRUE)
-  auc_roc <- pROC::auc(roc_curve)
+  # Create Baseline Metrics For Eval
+  baseline_prob <- mean(y_train)
+  baseline_log_loss <- logLoss(y_test, rep(baseline_prob, length(y_test)))
   
-  print(paste0("Show Date: ", test_dte, " | Accuracy: ", round(acc, 3), " | Precision: ", round(prec, 3), " | Recall: ", round(recall, 3), " | F1 Score: ", round(f1_score, 3), " | AUC: ", round(auc_roc,3)))
-  
-  correct_a0_p0 <- sum(model_predictions$actual == 0 & model_predictions$optimal_pred == 0)
-  correct_a1_p1 <- sum(model_predictions$actual == 1 & model_predictions$optimal_pred == 1)
-  correct_a1_p0 <- sum(model_predictions$actual == 1 & model_predictions$optimal_pred == 0)
-  correct_a0_p1 <- sum(model_predictions$actual == 0 & model_predictions$optimal_pred == 1)
-  
-  feat <- top_features %>% select(Feature) %>% pull()
-  gain <- top_features %>% select(Gain) %>% pull()
-  cov <- top_features %>% select(Cover) %>% pull()
-  freq <- top_features %>% select(Frequency) %>% pull()
-  
-  ## SAVE ACC METRICS ##
-  metrics_df <- data.frame(
-    date = test_dte,
-    train_start = filt_dates[[1]],
-    train_end = filt_dates[[length(filt_dates)]],
-    city = city_index[[1]],
-    accuracy = acc,
-    precision = prec,
-    recall = recall,
-    f1 = f1_score,
-    auc = as.numeric(auc_roc),
-    n_shows = n_shows,
-    max_depth = m_depth,
-    rounds = rounds,
-    eta = rt,
-    correct_a0_p0 = correct_a0_p0,
-    correct_a1_p1 = correct_a1_p1,
-    incorrect_a1_p0 = correct_a1_p0,
-    incorrect_a0_p1 = correct_a0_p1,
-    features_top = feat,
-    features_gain = gain,
-    features_cover = cov,
-    features_freq = freq
+  # Train Model
+  params <- list(
+    objective = "binary:logistic",
+    eval_metric = "logloss",
+    max_depth = 6,
+    eta = 0.1
   )
   
-  model_predictions$city <- city_index
-  
-  gc()
-  
-  
-  return(list(metrics_df, model_predictions))
-  
-}
-
-# Task 2: Loop Models For Years You Want To Test (Default is 2023+2024)
-# Produces Two Outputs In General Envrionment (acc_metrics)
-  # Model Accuracy Metrics For Each DataFrame (all_song_predictions_df)
-  # Setlist of Predictions and Actual For Each Show Tested
-loop_model <- function(test_shows = 10){
-  
-  # Get Test Dates #
-  test_dates <- model_table %>% select(date) %>% arrange(desc(date)) %>% unique() %>% head(test_shows) %>% pull()
-  metrics_list_dfs <- c()
-  predict_songs_dfs <- c()
-  
-  # Loop Model Build #
-    for(i in 1:length(test_dates)){
-      return_list <- build_model(test_dates[[i]])
-      metrics_list_dfs[[i]] <- return_list[[1]]
-      predict_songs_dfs[[i]] <- return_list[[2]]
-      
-      print(predict_songs_dfs[[i]] %>% select(date, song_name, pred, actual) %>% filter(actual == 1) %>% arrange(desc(pred)) %>% head(10))
-    }
-  all_metrics <- bind_rows(metrics_list_dfs)
-  
-  acc_metrics <<- all_metrics %>% arrange(desc(date)) %>%
-    select(-starts_with('features_')) %>%
-    unique()
-  
-  feat_metrics <<- all_metrics %>%
-    group_by(features_top) %>%
-    summarise(
-      n_times = n(),
-      avg_gain = mean(features_gain),
-      avg_cover = mean(features_cover),
-      avg_freq = mean(features_freq),
-      weight = n_times * avg_gain,
-    ) %>%
-    arrange(desc(weight))
-  
-  all_song_predictions_df <<- bind_rows(predict_songs_dfs) %>%
-    arrange(desc(date), desc(pred), desc(actual)) %>%
-    left_join(
-      model_table, by = c('date', 'city', 'song_name')
-    )
-
-}
-loop_model()
-
-# Evaluate Model
-evaluate_model <- function(data = all_song_predictions_df){
-  y_true <- data$actual
-  y_pred <- data$pred
-  y_bin_pred <- data$ optimal_pred
-  
-  # AUC
-  roc_curve <- roc(y_true, y_pred)
-  auc_value <- pROC::auc(roc_curve)
-  
-  # Log Loss
-  logloss_value <- logLoss(y_true, y_pred)
-  
-  # Rec, Prec, F1
-  recall <- sum(y_bin_pred == 1 & y_true == 1) / sum(y_true == 1)
-  precision <- sum(y_bin_pred == 1 & y_true == 1) / sum(y_bin_pred == 1)
-  f1_score <- 2 * (precision * recall) / (precision + recall)
-  accuracy <- sum(y_bin_pred == y_true) / length(y_true)
-  
-  # Print the results
-  cat("AUC:", auc_value, "\n")
-  cat("LogLoss:", logloss_value, "\n")
-  cat("Recall:", recall, "\n")
-  cat("Precision:", precision, "\n")
-  cat("F1 Score:", f1_score, "\n")
-  cat("Accuracy:", accuracy, "\n")
-  
-  # Plot ROC
-  plot_roc_df <- data.frame(
-    false_positive_rate = 1 - roc_curve$specificities,
-    true_positive_rate = roc_curve$sensitivities
+  model <- xgboost(
+    data = dtrain,
+    params = params,
+    nrounds = 100,
+    verbose = 0
   )
   
-  yr_st <- format(min(acc_metrics$date), "%Y")
-  yr_end <- format(max(acc_metrics$date), "%Y")
-  shws <- max(acc_metrics$n_shows)
+  # Make Predictions
+  y_pred <- predict(model, dtest)
   
-  p <- ggplot(plot_roc_df, aes(x = false_positive_rate, y = true_positive_rate)) +
-    geom_line(color = "blue", size = 1.25) +
-    geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "red", size = 1.5) +
-    labs(title = "WSP Setlist Model - AUC Curve",
-         subtitle = paste0("Based on Testing Model Results of Concerts From ",yr_st,"-", yr_end," | Each Show Trained on Last ",shws," Concerts"),
-         x = "False Positive Rate", y = "True Positive Rate") +
-    annotate("text", x=0.90, y=0.1, label = paste0("AUC Score: ", round(auc_value, 3)),
-             color = "black", size= 5) +
-    theme_minimal()
+  # Evaluate Thresholds
+  thresholds <- seq(0, 1, by = 0.01)
+  results <- data.frame(threshold = thresholds, accuracy = numeric(length(thresholds)))
   
-  total_acc_metrics <- acc_metrics %>%
-    group_by() %>%
-    summarise(
-      correct_a0_p0 = sum(correct_a0_p0),
-      correct_a1_p1 = sum(correct_a1_p1),
-      incorrect_a1_p0 = sum(incorrect_a1_p0),
-      incorrect_a0_p1 = sum(incorrect_a0_p1),
-      precision = correct_a1_p1 / (correct_a1_p1+incorrect_a0_p1),
-      recall = correct_a1_p1 / (incorrect_a1_p0+correct_a1_p1),
-      f1_score = 2 * precision * recall / (precision + recall)
+  for (t in thresholds) {
+    y_pred_class <- ifelse(y_pred > t, 1, 0)
+    conf_matrix <- confusionMatrix(as.factor(y_pred_class), as.factor(y_test))
+    results$accuracy[which(results$threshold == t)] <- conf_matrix$overall["Accuracy"]
+  }
+  
+  # Plot the accuracy vs threshold
+  plot(results$threshold, results$accuracy, type = "l", col = "blue", 
+       xlab = "Threshold", ylab = "Accuracy", main = "Accuracy vs Threshold")
+  
+  
+  y_pred_class <- ifelse(y_pred > 0.5, 1, 0)
+  
+  # Evaluate Model
+  conf_matrix <- confusionMatrix(as.factor(y_pred_class), as.factor(y_test))
+  accuracy <- conf_matrix$overall["Accuracy"]
+  auc_score <- auc(y_test, y_pred)
+  model_logloss <- logLoss(y_test, y_pred)
+  
+  # Log Loss Calc
+  print(paste("Baseline Probability:", baseline_prob))
+  print(paste("Baseline Log Loss:", round(baseline_log_loss, 4)))
+  print(paste("XGBoost Log Loss:", round(model_logloss, 4)))
+  print(paste("Log Loss Improvement:", round(baseline_log_loss - model_logloss, 4)))
+  
+  # Other Calcs
+  print(conf_matrix)
+  print(paste("Accuracy:", round(accuracy, 4)))
+  print(paste("AUC:", round(auc_score, 4)))
+  
+  return(model)
+}
+# Resampled Model
+trained_xgb_resample <- train_model(resample = TRUE)
+# No Resample
+trained_xgb_raw <- train_model(resample = FALSE)
+
+### APPLY MODEL ###
+apply_model<- function(mdl = trained_xgb_raw, input = sell_sell_table){
+  target <- 'played'
+  id_cols <- c('song_name', 'show_index', 'city', 'date', 'venue_full', 'ftp')
+  feature_cols <- setdiff(names(input), c(target, id_cols))
+  
+  id_df <- input[, id_cols]
+  new_features <- input %>%
+    select(all_of(feature_cols)) %>%
+    as.matrix()
+  
+  new_dmatrix <- xgb.DMatrix(data = new_features)
+  new_predictions <- predict(mdl, new_dmatrix)
+  input$pred <- new_predictions
+  
+  return(input %>% arrange(-pred))
+  
+}
+
+
+### CREATE SHOW TABLES ###
+
+# Create Predictions Given Dates
+AC_N1 <- apply_model(input = manipulate_train(test_date = "2025-02-15"))
+AC_N2 <- apply_model(input = manipulate_train(test_date = "2025-02-16"))
+AC_N3 <- apply_model(input = manipulate_train(test_date = "2025-02-17"))
+
+# Combine
+AC_ALL <- AC_N1 %>%
+  left_join(AC_N2 %>% select(song_name, pred) %>% rename(N2 = pred), by = c('song_name')) %>%
+  left_join(AC_N3 %>% select(song_name, pred) %>% rename(N3 = pred), by = c('song_name')) %>%
+  mutate(Mean = (pred + N2 + N3) / 3)
+
+
+##### TABLES #####
+
+# Single Night
+build_next_show_table <- function(data = sell_sell, n_preds = 10){
+  keep_overall_cols <- c('song_name', 'pred', 'pct_shows_since_debut', 'pct_shows_all_time',
+                         'pct_shows_mikey_years', 'pct_shows_jimmy_years', 'diff_jimmy_mikey_shows',
+                         #'pct_shows_same_venue', 'diff_shows_same_venue',
+                         'pct_shows_same_day', 'diff_shows_same_day',
+                         'ltp', 'ltp_2', 'ltp_3', 'avg_ltp', 'ltp_diff', 'ltp_ratio',
+                         'raw_score', 'raw_run_score', 'overdue_run_metric')
+  
+  
+  show_date <- unique(data$date)
+  show_city <- unique(data$city)
+  show_venue <- unique(data$venue_full)
+  #show_state <- unique(data$state)
+  show_sir <- unique(data$show_in_run)
+  
+  lab <- "Widespread Panic Setlist Predictions"
+  sub_lab <- paste0("Predictions for ", show_date, " @ ", show_venue, " (N",show_sir,")")
+  
+  df <- data %>% arrange(-pred) %>% select(all_of(keep_overall_cols)) %>% head(n_preds)
+  
+  gt_obj <- df %>%
+    gt() %>%
+    # Spanners
+    tab_spanner(
+      label = "Song Frequency (% of Shows)",
+      columns = c(pct_shows_since_debut, pct_shows_all_time,
+                  pct_shows_mikey_years, pct_shows_jimmy_years, diff_jimmy_mikey_shows,
+                  #pct_shows_same_venue, diff_shows_same_venue,
+                  pct_shows_same_day, diff_shows_same_day),
+      id = "FREQ"
+    ) %>%
+    tab_spanner(
+      label = "Last Time Played",
+      columns = c(ltp, ltp_2, ltp_3, avg_ltp, ltp_diff, ltp_ratio),
+      id = 'LTP'
+    ) %>%
+    tab_spanner(
+      label = "Metrics",
+      columns = c(raw_score, raw_run_score, overdue_run_metric),
+      id = "METRICS"
+    ) %>%
+    tab_style(
+      style = list(
+        cell_borders(
+          sides = c("right", "left", "bottom"),
+          color = "#333F48",
+          weight = px(2)
+        ),
+        cell_text(
+          weight = "bold",
+          style = "italic",
+          color = "white"
+        ),
+        cell_fill(
+          color = "#BF5700"
+        )
+      ),
+      locations = cells_column_spanners(spanners = c("FREQ", "LTP", "METRICS"))
+    ) %>%
+    # Song + Pred Columns Format
+    tab_style(
+      locations = cells_body(columns = c(song_name)),
+      style = list(
+        css(
+          text_align = "left",
+          font_weight = "bold",
+          border_right = "2px solid #333F48"
+        )
+      )
+    ) %>%
+    tab_style(
+      locations = cells_body(columns = c(pred)),
+      style = list(
+        css(
+          text_align = "center",
+          font_weight = "bold",
+          border_right = "2px solid #333F48"
+        )
+      )
+    ) %>%
+    # Song Frequency Columns
+    tab_style(
+      locations = cells_body(columns = c(pct_shows_since_debut,pct_shows_all_time,pct_shows_mikey_years,pct_shows_jimmy_years,diff_jimmy_mikey_shows,
+                                         #pct_shows_same_venue, diff_shows_same_venue,
+                                         pct_shows_same_day, diff_shows_same_day)),
+      style = list(
+        css(
+          text_align = "center"
+        )
+      )
+    ) %>%
+    tab_style(
+      locations = cells_body(columns = c(diff_jimmy_mikey_shows,
+                                         #diff_shows_same_venue,
+                                         diff_shows_same_day,
+                                         ltp_ratio)),
+      style = list(
+        css(
+          text_align = "center",
+          border_right = "2px solid #333F48"
+        )
+      )
+    ) %>%
+    # LTP Columns
+    tab_style(
+      locations = cells_body(columns = c(ltp, ltp_2, ltp_3, avg_ltp, ltp_diff)),
+      style = list(
+        css(
+          text_align = "center"
+        )
+      )
+    ) %>%
+    # Metric Columns
+    tab_style(
+      locations = cells_body(columns = c(raw_score, raw_run_score, overdue_run_metric)),
+      style = list(
+        css(
+          text_align = "center"
+        )
+      )
+    ) %>%
+    # Number Format
+    fmt_percent(
+      columns = c(pct_shows_since_debut,pct_shows_all_time,pct_shows_mikey_years,pct_shows_jimmy_years,diff_jimmy_mikey_shows,
+                  #pct_shows_same_venue, diff_shows_same_venue,
+                  pct_shows_same_day, diff_shows_same_day,
+                  pred),
+      decimals = 1
+    ) %>%
+    fmt_number(
+      columns = c(avg_ltp,ltp_diff),
+      decimals = 1
+    ) %>%
+    fmt_number(
+      columns = c(ltp_ratio, raw_score,	raw_run_score,	overdue_run_metric),
+      decimals = 2
+    ) %>%
+    # Column Labels
+    tab_style(
+      locations = cells_column_labels(),
+      style = list(
+        css(
+          color = "black",
+          text_align = "center",
+          font_weight = "bold",
+          border_bottom = "2px solid black"
+        )
+      )
+    ) %>%
+    tab_style(
+      locations = cells_column_labels(columns = c(song_name, pred)),
+      style = list(
+        css(
+          color = "white",
+          text_align = "center",
+          font_weight = "bold",
+          border_bottom = "2px solid black",
+          border_right = "2px solid #333F48",
+          background_color = "#BF5700"
+        )
+      )
+    ) %>%
+    tab_style(
+      locations = cells_column_labels(columns = c(diff_jimmy_mikey_shows,
+                                                  #diff_shows_same_venue,
+                                                  diff_shows_same_day,
+                                                  ltp_ratio, overdue_run_metric)),
+      style = list(
+        css(
+          color = "black",
+          text_align = "center",
+          font_weight = "bold",
+          border_bottom = "2px solid black",
+          border_right = "2px solid #333F48"
+        )
+      )
+    ) %>%
+    # Color Scales
+    data_color(
+      columns = c(pred),
+      fn = scales::col_numeric(
+        palette = colorRamp(c("#BCCFB4", "#09622A"), interpolate="spline"),
+        domain = c(0,1)
+      )
+    ) %>%
+    data_color(
+      columns = c(#diff_shows_same_venue,
+        diff_shows_same_day),
+      fn = scales::col_numeric(
+        palette = colorRamp(c('#B70005FF', '#EA332FFF', '#EF6A63FF', '#F8BEB0FF','#FFFFFF', '#CDE1C2FF','#55974CFF', '#287A22FF', '#17692CFF'), interpolate="spline"),
+        domain = c(-0.2,0.2)
+      )
+    ) %>%
+    # Header
+    tab_header(
+      title = md(
+        paste0("<span style='color:white'>**",lab,"**</style>")
+      ),
+      subtitle = md(
+        paste0("<span style='color:white'>***",sub_lab,"***</style>")
+      )
+    ) %>%
+    # Rename Labels
+    cols_label(
+      song_name = "Song",
+      pct_shows_since_debut = "Since Debut",
+      pct_shows_all_time = "All Time",
+      pct_shows_mikey_years = "Mikey Shows",
+      pct_shows_jimmy_years = "Jimmy Shows",
+      diff_jimmy_mikey_shows = "Jimmy - Mikey",
+      #pct_shows_same_venue = "Venue",
+      #diff_shows_same_venue = "+/-",
+      pct_shows_same_day = "Day",
+      diff_shows_same_day = "+/-",
+      ltp = "1",
+      ltp_2 = "2",
+      ltp_3  = "3",
+      avg_ltp = "AVG",
+      ltp_diff = "LTP-AVG",
+      ltp_ratio = "LTP/AVG",
+      raw_score = "Show Score",
+      raw_run_score = "Run Score",
+      overdue_run_metric = "Overdue Score",
+      pred = "Pred"
+    ) %>%
+    tab_options(
+      table.border.top.style = "solid",
+      table.border.top.width = "3px",
+      table.border.top.color = "#333F48",
+      table.border.right.style = "solid",
+      table.border.right.width = "3px",
+      table.border.right.color = "#333F48",
+      table.border.bottom.style = "solid",
+      table.border.bottom.width = "3px",
+      table.border.bottom.color = "#333F48",
+      table.border.left.style = "solid",
+      table.border.left.width = "3px",
+      table.border.left.color = "#333F48",
+      heading.background.color = "#BF5700"
     )
   
-  print(total_acc_metrics)
-  print(p)
+  return(gt_obj)
+  
 }
-evaluate_model()
+build_next_show_table(data = AC_N2, n_preds = 20)
 
-# Task 3: "Apply" Model To Next Show Incorporating X Most Recent Shows
-make_predictions <- function(data = sell_sell_table, target_var = 'played'){
-  ## Pre-Processing ##
+# Single Run
+build_next_run_table <- function(data = AC_ALL, n_preds = 10){
   
-  # Split
-  test_data <- data
-  train_data <- model_table %>% filter(date < max(test_data$date) & show_index >= (sell_sell_table$show_index[[1]] - 400))
-
-  # Keep Indicies
-  song_index <- test_data$song_name
-  date_index <- test_data$date[[1]]
-  city_index <- test_data$city[[1]]
-  
-  # Features And Targets
-  target <- "played"
-  features <- names(train_data)[!names(train_data) %in% c("played", "city", "date", "venue_full", "song_name", "show_index")] #
-
-  ## TRAIN ##
-  
-  # Train the Setlist Prediction xgboost Model
-  xgb_model <- xgboost(data = as.matrix(train_data[, features]),
-                       label = as.numeric(train_data[[target]]),
-                       objective = "binary:logistic",
-                       eval.metric = 'logloss',
-                       max.depth=7,
-                       nrounds = 250,
-                       eta = 0.05,
-                       verbose = 0)
-  
-  pred_vec <- predict(xgb_model, as.matrix(test_data[, features]))
-  
-  prediction_df_test <- data.frame(
-    date = test_data$date,
-    city = test_data$city,
-    song_name = song_index,
-    pred = pred_vec
-  ) %>%
-    arrange(desc(pred))
-  
-  print(paste0("Top 5 Song Predictions for ", date_index, " @ ", city_index))
-  print(prediction_df_test %>% head(5))
-  
-  prediction_df_test <- prediction_df_test %>%
-    left_join(data, by = c('date', 'city', 'song_name'))
-  
-  ## Train + Predict Opener
+  keep_run_cols <- c('song_name', 'Mean', 'pred', 'N2', 'N3', 'pct_shows_since_debut', 'pct_shows_all_time',
+                     'pct_shows_mikey_years', 'pct_shows_jimmy_years', 'diff_jimmy_mikey_shows',
+                     #'pct_shows_same_venue', 'diff_shows_same_venue',
+                     'ltp', 'ltp_2', 'ltp_3', 'avg_ltp', 'ltp_diff', 'ltp_ratio',
+                     'raw_score', 'raw_run_score', 'overdue_run_metric')
   
   
-  return(prediction_df_test)
+  show_date <- unique(data$date)
+  show_city <- unique(data$city)
+  show_venue <- unique(data$venue_full)
   
-
+  lab <- "Widespread Panic Setlist Predictions"
+  sub_lab <- paste0("Predictions for ", show_venue)
+  
+  df <- data %>% arrange(-Mean) %>% head(n_preds) %>% select(all_of(keep_run_cols))
+  
+  gt_obj <- df %>%
+    gt() %>%
+    # Spanners
+    tab_spanner(
+      label = "Predictions",
+      columns = c(Mean, pred, N2, N3),
+      id = 'PRED'
+    ) %>%
+    tab_spanner(
+      label = "Song Frequency (% of Shows)",
+      columns = c(pct_shows_since_debut, pct_shows_all_time,
+                  pct_shows_mikey_years, pct_shows_jimmy_years, diff_jimmy_mikey_shows#,
+                  #pct_shows_same_venue, diff_shows_same_venue
+      ),
+      id = "FREQ"
+    ) %>%
+    tab_spanner(
+      label = "Last Time Played",
+      columns = c(ltp, ltp_2, ltp_3, avg_ltp, ltp_diff, ltp_ratio),
+      id = 'LTP'
+    ) %>%
+    tab_spanner(
+      label = "Metrics",
+      columns = c(raw_score, raw_run_score, overdue_run_metric),
+      id = "METRICS"
+    ) %>%
+    tab_style(
+      style = list(
+        cell_borders(
+          sides = c("right", "left", "bottom"),
+          color = "#333F48",
+          weight = px(2)
+        ),
+        cell_text(
+          weight = "bold",
+          style = "italic",
+          color = "white"
+        ),
+        cell_fill(
+          color = "#BF5700"
+        )
+      ),
+      locations = cells_column_spanners(spanners = c("PRED","FREQ", "LTP", "METRICS"))
+    ) %>%
+    # Song + Pred Columns Format
+    tab_style(
+      locations = cells_body(columns = c(song_name)),
+      style = list(
+        css(
+          text_align = "left",
+          font_weight = "bold",
+          border_right = "2px solid #333F48"
+        )
+      )
+    ) %>%
+    tab_style(
+      locations = cells_body(columns = c(Mean)),
+      style = list(
+        css(
+          text_align = "center",
+          font_style = "itallic",
+          font_weight = "bold",
+          border_right = "2px solid #333F48"
+        )
+      )
+    ) %>%
+    tab_style(
+      locations = cells_body(columns = c(N3)),
+      style = list(
+        css(
+          text_align = "center",
+          font_style = "itallic",
+          border_right = "2px solid #333F48"
+        )
+      )
+    ) %>%
+    tab_style(
+      locations = cells_body(columns = c(pred, N2)),
+      style = list(
+        css(
+          text_align = "center",
+          font_style = "itallic"
+        )
+      )
+    ) %>%
+    # Song Frequency Columns
+    tab_style(
+      locations = cells_body(columns = c(pct_shows_since_debut,pct_shows_all_time,pct_shows_mikey_years,pct_shows_jimmy_years,diff_jimmy_mikey_shows,
+                                         #pct_shows_same_venue, diff_shows_same_venue,
+      )
+      ),
+      style = list(
+        css(
+          text_align = "center"
+        )
+      )
+    ) %>%
+    tab_style(
+      locations = cells_body(columns = c(N3,
+                                         diff_jimmy_mikey_shows,
+                                         #diff_shows_same_venue,
+                                         ltp_ratio)),
+      style = list(
+        css(
+          text_align = "center",
+          border_right = "2px solid #333F48"
+        )
+      )
+    ) %>%
+    # LTP Columns
+    tab_style(
+      locations = cells_body(columns = c(ltp, ltp_2, ltp_3, avg_ltp, ltp_diff)),
+      style = list(
+        css(
+          text_align = "center"
+        )
+      )
+    ) %>%
+    # Metric Columns
+    tab_style(
+      locations = cells_body(columns = c(raw_score, raw_run_score, overdue_run_metric)),
+      style = list(
+        css(
+          text_align = "center"
+        )
+      )
+    ) %>%
+    # Number Format
+    fmt_percent(
+      columns = c(pct_shows_since_debut,pct_shows_all_time,pct_shows_mikey_years,pct_shows_jimmy_years,diff_jimmy_mikey_shows,
+                  #pct_shows_same_venue, diff_shows_same_venue,
+                  Mean, pred, N2, N3),
+      decimals = 1
+    ) %>%
+    fmt_number(
+      columns = c(avg_ltp,ltp_diff),
+      decimals = 1
+    ) %>%
+    fmt_number(
+      columns = c(ltp_ratio, raw_score,	raw_run_score,	overdue_run_metric),
+      decimals = 2
+    ) %>%
+    # Column Labels
+    tab_style(
+      locations = cells_column_labels(),
+      style = list(
+        css(
+          color = "black",
+          text_align = "center",
+          font_weight = "bold",
+          border_bottom = "2px solid black"
+        )
+      )
+    ) %>%
+    tab_style(
+      locations = cells_column_labels(columns = c(song_name)),
+      style = list(
+        css(
+          color = "white",
+          text_align = "center",
+          font_weight = "bold",
+          border_bottom = "2px solid black",
+          border_right = "2px solid #333F48",
+          background_color = "#BF5700"
+        )
+      )
+    ) %>%
+    tab_style(
+      locations = cells_column_labels(columns = c(N3,
+                                                  diff_jimmy_mikey_shows,
+                                                  #diff_shows_same_venue,
+                                                  ltp_ratio, overdue_run_metric)),
+      style = list(
+        css(
+          color = "black",
+          text_align = "center",
+          font_weight = "bold",
+          border_bottom = "2px solid black",
+          border_right = "2px solid #333F48"
+        )
+      )
+    ) %>%
+    # Color Scales
+    data_color(
+      columns = c(Mean, pred, N2, N3),
+      fn = scales::col_numeric(
+        palette = colorRamp(c("#BCCFB4", "#09622A"), interpolate="spline"),
+        domain = c(0,1)
+      )
+    ) %>%
+    #data_color(
+    #  columns = c(#diff_shows_same_venue,),
+    #  fn = scales::col_numeric(
+    #    palette = colorRamp(c('#B70005FF', '#EA332FFF', '#EF6A63FF', '#F8BEB0FF','#FFFFFF', '#CDE1C2FF','#55974CFF', '#287A22FF', '#17692CFF'), interpolate="spline"),
+    #    domain = c(-0.2,0.2)
+    #  )
+    #) %>%
+    # Header
+    tab_header(
+      title = md(
+        paste0("<span style='color:white'>**",lab,"**</style>")
+      ),
+      subtitle = md(
+        paste0("<span style='color:white'>***",sub_lab,"***</style>")
+      )
+    ) %>%
+    # Rename Labels
+    cols_label(
+      song_name = "Song",
+      pct_shows_since_debut = "Since Debut",
+      pct_shows_all_time = "All Time",
+      pct_shows_mikey_years = "Mikey Shows",
+      pct_shows_jimmy_years = "Jimmy Shows",
+      diff_jimmy_mikey_shows = "Jimmy - Mikey",
+      #pct_shows_same_venue = "Venue",
+      #diff_shows_same_venue = "+/-",
+      ltp = "1",
+      ltp_2 = "2",
+      ltp_3  = "3",
+      avg_ltp = "AVG",
+      ltp_diff = "LTP-AVG",
+      ltp_ratio = "LTP/AVG",
+      raw_score = "Show Score",
+      raw_run_score = "Run Score",
+      overdue_run_metric = "Overdue Score",
+      pred = "N1"
+    ) %>%
+    tab_options(
+      table.border.top.style = "solid",
+      table.border.top.width = "3px",
+      table.border.top.color = "#333F48",
+      table.border.right.style = "solid",
+      table.border.right.width = "3px",
+      table.border.right.color = "#333F48",
+      table.border.bottom.style = "solid",
+      table.border.bottom.width = "3px",
+      table.border.bottom.color = "#333F48",
+      table.border.left.style = "solid",
+      table.border.left.width = "3px",
+      table.border.left.color = "#333F48",
+      heading.background.color = "#BF5700"
+    )
+  
+  return(gt_obj)
+  
 }
-sell_sell <- make_predictions(data = manipulate_train(dim_future$date[[1]])) %>% arrange(desc(pred))
+build_next_run_table(AC_ALL, n_preds = 20)
 
-STONES <- make_predictions(data = manipulate_train("2024-06-20")) %>% arrange(desc(pred))
-RRX_N1 <- make_predictions(data = manipulate_train("2024-06-21")) %>% arrange(desc(pred))
-RRX_N2 <- make_predictions(data = manipulate_train("2024-06-22")) %>% arrange(desc(pred))
-RRX_N3 <- make_predictions(data = manipulate_train("2024-06-23")) %>% arrange(desc(pred))
-
-
-# Save Tables
-all_song_predictions_df <- all_song_predictions_df %>% select(date, city, song_name, pred, actual, optimal_pred) %>%
-  left_join(model_table, by = c('date', 'city', 'song_name'))
-
-sell_sell_table %>%
-  select(song_name, pct_shows_opener, n_shows_opener) %>%
-  filter(n_shows_opener <= 1) %>%
-  arrange(-pct_shows_opener) %>%
-  head(10) %>%
-  print.data.frame()
-
-# Save - 2021-2024 Song Prediction
-write_rds(all_song_predictions_df, "./Data/SongPredictions.rds")
-write_csv(all_song_predictions_df, "./Data/SongPredictions.csv")
-
-# Save - Accuracy Metrics
-write_rds(acc_metrics, "./Data/AccuracyMetrics.rds")
-write_csv(acc_metrics, "./Data/AccuracyMetrics.csv")
-
-# Save - Single Show
-write_csv(STONES, "./Data/Predictions/RRX_2024/N0_20240620.csv")
-write_csv(RRX_N1, "./Data/Predictions/RRX_2024/N1_20240621.csv")
-write_csv(RRX_N2, "./Data/Predictions/RRX_2024/N2_20240622.csv")
-write_csv(RRX_N3, "./Data/Predictions/RRX_2024/N3_20240623.csv")
+# Bustouts on Run
+build_next_run_rare_table <- function(data = AC_ALL, n_preds = 10){
+  keep_run_cols <- c('song_name', 'Mean', 'pred', 'N2', 'N3', 'pct_shows_since_debut', 'pct_shows_all_time',
+                     'pct_shows_mikey_years', 'pct_shows_jimmy_years', 'diff_jimmy_mikey_shows',
+                     #'pct_shows_same_venue', 'diff_shows_same_venue',
+                     'ltp', 'ltp_2', 'ltp_3', 'avg_ltp', 'ltp_diff', 'ltp_ratio',
+                     'raw_score', 'raw_run_score', 'overdue_run_metric')
+  
+  
+  show_date <- unique(data$date)
+  show_city <- unique(data$city)
+  show_venue <- unique(data$venue_full)
+  
+  lab <- "Widespread Panic Setlist Predictions - Bust Outs"
+  sub_lab <- paste0("Bust Out Predictions for ", show_venue, " - Songs With < 10% Played Since Debut")
+  
+  df <- data %>% filter(pct_shows_since_debut < 0.10, pct_shows_since_debut > 0.02) %>% arrange(-(Mean / pct_shows_since_debut)) %>% head(n_preds) %>% select(all_of(keep_run_cols))
+  
+  gt_obj <- df %>%
+    gt() %>%
+    # Spanners
+    tab_spanner(
+      label = "Predictions",
+      columns = c(Mean, pred, N2, N3),
+      id = 'PRED'
+    ) %>%
+    tab_spanner(
+      label = "Song Frequency (% of Shows)",
+      columns = c(pct_shows_since_debut, pct_shows_all_time,
+                  pct_shows_mikey_years, pct_shows_jimmy_years, diff_jimmy_mikey_shows#,
+                  #pct_shows_same_venue, diff_shows_same_venue
+      ),
+      id = "FREQ"
+    ) %>%
+    tab_spanner(
+      label = "Last Time Played",
+      columns = c(ltp, ltp_2, ltp_3, avg_ltp, ltp_diff, ltp_ratio),
+      id = 'LTP'
+    ) %>%
+    tab_spanner(
+      label = "Metrics",
+      columns = c(raw_score, raw_run_score, overdue_run_metric),
+      id = "METRICS"
+    ) %>%
+    tab_style(
+      style = list(
+        cell_borders(
+          sides = c("right", "left", "bottom"),
+          color = "#333F48",
+          weight = px(2)
+        ),
+        cell_text(
+          weight = "bold",
+          style = "italic",
+          color = "white"
+        ),
+        cell_fill(
+          color = "#BF5700"
+        )
+      ),
+      locations = cells_column_spanners(spanners = c("PRED","FREQ", "LTP", "METRICS"))
+    ) %>%
+    # Song + Pred Columns Format
+    tab_style(
+      locations = cells_body(columns = c(song_name)),
+      style = list(
+        css(
+          text_align = "left",
+          font_weight = "bold",
+          border_right = "2px solid #333F48"
+        )
+      )
+    ) %>%
+    tab_style(
+      locations = cells_body(columns = c(Mean)),
+      style = list(
+        css(
+          text_align = "center",
+          font_style = "itallic",
+          font_weight = "bold",
+          border_right = "2px solid #333F48"
+        )
+      )
+    ) %>%
+    tab_style(
+      locations = cells_body(columns = c(N3)),
+      style = list(
+        css(
+          text_align = "center",
+          font_style = "itallic",
+          border_right = "2px solid #333F48"
+        )
+      )
+    ) %>%
+    tab_style(
+      locations = cells_body(columns = c(pred, N2)),
+      style = list(
+        css(
+          text_align = "center",
+          font_style = "itallic"
+        )
+      )
+    ) %>%
+    # Song Frequency Columns
+    tab_style(
+      locations = cells_body(columns = c(pct_shows_since_debut,pct_shows_all_time,pct_shows_mikey_years,pct_shows_jimmy_years,diff_jimmy_mikey_shows,
+                                         #pct_shows_same_venue, diff_shows_same_venue,
+      )
+      ),
+      style = list(
+        css(
+          text_align = "center"
+        )
+      )
+    ) %>%
+    tab_style(
+      locations = cells_body(columns = c(N3,
+                                         diff_jimmy_mikey_shows,
+                                         #diff_shows_same_venue,
+                                         ltp_ratio)),
+      style = list(
+        css(
+          text_align = "center",
+          border_right = "2px solid #333F48"
+        )
+      )
+    ) %>%
+    # LTP Columns
+    tab_style(
+      locations = cells_body(columns = c(ltp, ltp_2, ltp_3, avg_ltp, ltp_diff)),
+      style = list(
+        css(
+          text_align = "center"
+        )
+      )
+    ) %>%
+    # Metric Columns
+    tab_style(
+      locations = cells_body(columns = c(raw_score, raw_run_score, overdue_run_metric)),
+      style = list(
+        css(
+          text_align = "center"
+        )
+      )
+    ) %>%
+    # Number Format
+    fmt_percent(
+      columns = c(pct_shows_since_debut,pct_shows_all_time,pct_shows_mikey_years,pct_shows_jimmy_years,diff_jimmy_mikey_shows,
+                  #pct_shows_same_venue, diff_shows_same_venue,
+                  Mean, pred, N2, N3),
+      decimals = 1
+    ) %>%
+    fmt_number(
+      columns = c(avg_ltp,ltp_diff),
+      decimals = 1
+    ) %>%
+    fmt_number(
+      columns = c(ltp_ratio, raw_score,	raw_run_score,	overdue_run_metric),
+      decimals = 2
+    ) %>%
+    # Column Labels
+    tab_style(
+      locations = cells_column_labels(),
+      style = list(
+        css(
+          color = "black",
+          text_align = "center",
+          font_weight = "bold",
+          border_bottom = "2px solid black"
+        )
+      )
+    ) %>%
+    tab_style(
+      locations = cells_column_labels(columns = c(song_name)),
+      style = list(
+        css(
+          color = "white",
+          text_align = "center",
+          font_weight = "bold",
+          border_bottom = "2px solid black",
+          border_right = "2px solid #333F48",
+          background_color = "#BF5700"
+        )
+      )
+    ) %>%
+    tab_style(
+      locations = cells_column_labels(columns = c(N3,
+                                                  diff_jimmy_mikey_shows,
+                                                  #diff_shows_same_venue,
+                                                  ltp_ratio, overdue_run_metric)),
+      style = list(
+        css(
+          color = "black",
+          text_align = "center",
+          font_weight = "bold",
+          border_bottom = "2px solid black",
+          border_right = "2px solid #333F48"
+        )
+      )
+    ) %>%
+    # Color Scales
+    data_color(
+      columns = c(Mean, pred, N2, N3),
+      fn = scales::col_numeric(
+        palette = colorRamp(c("#BCCFB4", "#09622A"), interpolate="spline"),
+        domain = c(0,0.4),
+      ),
+    ) %>%
+    # Header
+    tab_header(
+      title = md(
+        paste0("<span style='color:white'>**",lab,"**</style>")
+      ),
+      subtitle = md(
+        paste0("<span style='color:white'>***",sub_lab,"***</style>")
+      )
+    ) %>%
+    # Rename Labels
+    cols_label(
+      song_name = "Song",
+      pct_shows_since_debut = "Since Debut",
+      pct_shows_all_time = "All Time",
+      pct_shows_mikey_years = "Mikey Shows",
+      pct_shows_jimmy_years = "Jimmy Shows",
+      diff_jimmy_mikey_shows = "Jimmy - Mikey",
+      #pct_shows_same_venue = "Venue",
+      #diff_shows_same_venue = "+/-",
+      ltp = "1",
+      ltp_2 = "2",
+      ltp_3  = "3",
+      avg_ltp = "AVG",
+      ltp_diff = "LTP-AVG",
+      ltp_ratio = "LTP/AVG",
+      raw_score = "Show Score",
+      raw_run_score = "Run Score",
+      overdue_run_metric = "Overdue Score",
+      pred = "N1"
+    ) %>%
+    tab_options(
+      table.border.top.style = "solid",
+      table.border.top.width = "3px",
+      table.border.top.color = "#333F48",
+      table.border.right.style = "solid",
+      table.border.right.width = "3px",
+      table.border.right.color = "#333F48",
+      table.border.bottom.style = "solid",
+      table.border.bottom.width = "3px",
+      table.border.bottom.color = "#333F48",
+      table.border.left.style = "solid",
+      table.border.left.width = "3px",
+      table.border.left.color = "#333F48",
+      heading.background.color = "#BF5700"
+    )
+  
+  return(gt_obj)
+  
+}
+build_next_run_rare_table(AC_ALL, n_preds = 20)
 
 

@@ -3,6 +3,7 @@ library(tidyverse)
 library(rvest)
 library(lubridate)
 library(scales)
+library(purrr)
 `%notin%` = Negate(`%in%`)
 
 # Modeling
@@ -10,6 +11,7 @@ library(xgboost)
 library(pROC)
 library(caret)
 library(Metrics)
+library(performanceEstimation)
 
 # Plotting
 library(ggplot2)
@@ -349,10 +351,10 @@ process_setlist <- function(setlist_link) {
 }
 
 # Functions 1: Load All Show Information via EveryDayCompanion
-load_all_data <- function(start = 1986 , end = 2024) {
+load_all_data <- function(start = 1986 , end = 2025) {
   
   # Load Dim Stage 1
-  tour_data <- process_dim(st_yr = 1986, end_yr = 2024)
+  tour_data <- process_dim(st_yr = start, end_yr = end)
   
   # Split Historical and Future
   show_dim <- tour_data %>% filter(date < Sys.Date()) %>% filter(year >= start & year <= end)
@@ -470,7 +472,7 @@ update_all_data <- function(){
   
   # Set Up Dim For Update
   last_show = max(prev_dim_hist$date)
-  tour_data <- process_dim(st_yr = 1986, end_yr = 2024)
+  tour_data <- process_dim(st_yr = 1986, end_yr = 2025)
   
   update_dim <- tour_data %>% filter(date < Sys.Date() & date > last_show)
   fut_dim <- tour_data %>% filter(date >= Sys.Date())
@@ -591,19 +593,50 @@ update_all_data <- function(){
 data_list <- load_all_data(start = 1986, end = 2024)
 
 # Update Setlist Data
-data_list <- update_all_data()
+#data_list <- update_all_data()
 
 
 # Create Tables
+
+## Song Fact Table
 fact_song <- data_list[[1]]
+
+## Dim Historical Show (All Show Data Related To Historical Concerts)
 dim_historical <- data_list[[2]]
-dim_future <- data_list[[3]]
+
+## Dim Future Show (All Show Data Related To Future Concerts - Manual if EC Not Updated)
+dim_future <- if(length(data_list[[3]]$link)>0){
+  data_list[[3]]
+} else {
+  read_csv("./Data/20250209_PanicFutureDim - FutureDim.csv", show_col_types = FALSE) %>%
+    mutate(
+      date_num = as.character(date_num),
+      show_notes = if_else(is.na(show_notes), "", show_notes)
+    ) %>%
+    filter(date >= Sys.Date())
+}
+
+## Combine All
 dim_all <- rbind(dim_historical, dim_future)
 
-# Save Tables
-saveRDS(fact_song, file = paste0("./Data/WSP_Song_FactTable_", min(as.numeric(substr(fact_song$link, 39,42))),  "_to_", max(as.numeric(substr(fact_song$link, 39,42))), ".rds"))
-saveRDS(dim_historical, file = paste0("./Data/WSP_Dim_Show_Historical_", min(as.numeric(substr(dim_historical$link, 39,42))),  "_to_", max(as.numeric(substr(dim_historical$link, 39,42))), ".rds"))
-saveRDS(dim_future, file = paste0("./Data/WSP_Dim_Show_Future_", min(as.numeric(substr(dim_future$link, 39,42))),  "_to_", max(as.numeric(substr(dim_future$link, 39,42))), ".rds"))
 
+# Save Tables
+save_setlists <- function(song_df = fact_song, all_df = dim_all){
+  # Create Paths
+  start_year = min(as.numeric(substr(all_df$link, 39,42)))
+  end_year = max(as.numeric(substr(all_df$link, 39,42)))
+  
+  fact_path = paste0('./Data/WSP_Song_Fact_Table_', start_year, "_to_", end_year, ".rds")
+  dim_path = paste0('./Data/WSP_Show_Dim_Table_', start_year, "_to_", end_year, ".rds")
+  
+  # Save
+  saveRDS(fact_song, file = fact_path)
+  saveRDS(all_df, file = dim_path)
+  
+  # Print
+  print(paste0("Setlist Data Saved To ", fact_path))
+  print(paste0("Show Data Saved To ", dim_path))
+}
+save_setlists()
 
 

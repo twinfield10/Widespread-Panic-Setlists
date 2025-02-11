@@ -904,7 +904,7 @@ build_next_show_table <- function(data = sell_sell, n_preds = 10){
   return(gt_obj)
   
 }
-build_next_show_table(data = AC_N2, n_preds = 20)
+build_next_show_table(data = AC_N2, n_preds = 25)
 
 # Single Run
 build_next_run_table <- function(data = AC_ALL, n_preds = 10){
@@ -1187,9 +1187,9 @@ build_next_run_rare_table <- function(data = AC_ALL, n_preds = 10){
   show_venue <- unique(data$venue_full)
   
   lab <- "Widespread Panic Setlist Predictions - Bust Outs"
-  sub_lab <- paste0("Bust Out Predictions for ", show_venue, " - Songs With < 10% Played Since Debut")
+  sub_lab <- paste0("Bust Out Predictions for ", show_venue, " - Songs LTP > 15 & < 10% Played Since Debut")
   
-  df <- data %>% filter(pct_shows_since_debut < 0.10, pct_shows_since_debut > 0.02) %>% arrange(-(Mean / pct_shows_since_debut)) %>% head(n_preds) %>% select(all_of(keep_run_cols))
+  df <- data %>% filter(pct_shows_since_debut < 0.10, pct_shows_since_debut > 0.02, ltp > 15) %>% arrange(-(Mean / pct_shows_since_debut)) %>% head(n_preds) %>% select(all_of(keep_run_cols))
   
   gt_obj <- df %>%
     gt() %>%
@@ -1430,6 +1430,6 @@ build_next_run_rare_table <- function(data = AC_ALL, n_preds = 10){
   return(gt_obj)
   
 }
-build_next_run_rare_table(AC_ALL, n_preds = 20)
+build_next_run_rare_table(AC_ALL, n_preds = 25)
 
 

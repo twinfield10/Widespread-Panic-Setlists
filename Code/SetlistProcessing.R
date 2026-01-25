@@ -6,6 +6,9 @@ library(scales)
 library(purrr)
 `%notin%` = Negate(`%in%`)
 
+# Load S3 storage utilities
+source('./Code/storage.R')
+
 # Modeling
 library(xgboost)
 library(pROC)
@@ -461,13 +464,16 @@ load_all_data <- function(start = 1986 , end = 2025) {
 
 # Function 2: Update Most Recent Shows
 update_all_data <- function(){
-  # Load Previous Data
-  song_path <- './Data/WSP_Song_FactTable_1986_to_2024.rds'
-  dim_hist_path <- './Data/WSP_Dim_Show_Historical_1986_to_2024.rds'
-  dim_fut_path <- './Data/WSP_Dim_Show_Future_2024_to_2024.rds'
+  # Load Previous Data (with S3 fallback)
+  song_filename <- 'WSP_Song_Fact_Table_1986_to_2024.rds'
+  dim_hist_filename <- 'WSP_Show_Dim_Table_1986_to_2024.rds'
   
-  prev_dim_hist <- readRDS('./Data/WSP_Dim_Show_Historical_1986_to_2024.rds')
-  prev_dim_fut <- readRDS(dim_fut_path)
+  prev_song <- load_rds_with_s3(song_filename, local_dir = "./Data/")
+  prev_dim_hist <- load_rds_with_s3(dim_hist_filename, local_dir = "./Data/")
+  
+  if (is.null(prev_song) || is.null(prev_dim_hist)) {
+    stop("Could not load previous data from local or S3. Run load_all_data() first.")
+  }
   
   
   # Set Up Dim For Update
@@ -479,8 +485,8 @@ update_all_data <- function(){
   
   if(nrow(update_dim) == 0){
     print("All Historical Shows Up to Date")
-    return(list(readRDS(song_path),
-                readRDS(dim_hist_path),
+    return(list(prev_song,
+                prev_dim_hist,
                 fut_dim)
     )
     
@@ -491,7 +497,6 @@ update_all_data <- function(){
     
     # Load Setlists
     start_time <- Sys.time()
-    prev_song <- readRDS(song_path)
     load_links <- update_dim %>% filter(date > last_show & link %notin% unique(prev_song$link)) %>% pull(link) %>% unique()
     update_songs <- map_dfr(load_links, process_setlist)
     
@@ -622,20 +627,24 @@ dim_all <- rbind(dim_historical, dim_future)
 
 # Save Tables
 save_setlists <- function(song_df = fact_song, all_df = dim_all){
+  # Load S3 storage utilities
+  source('./Code/storage.R')
+  
   # Create Paths
   start_year = min(as.numeric(substr(all_df$link, 39,42)))
   end_year = max(as.numeric(substr(all_df$link, 39,42)))
   
-  fact_path = paste0('./Data/WSP_Song_Fact_Table_', start_year, "_to_", end_year, ".rds")
-  dim_path = paste0('./Data/WSP_Show_Dim_Table_', start_year, "_to_", end_year, ".rds")
+  fact_filename = paste0('WSP_Song_Fact_Table_', start_year, "_to_", end_year, ".rds")
+  dim_filename = paste0('WSP_Show_Dim_Table_', start_year, "_to_", end_year, ".rds")
   
-  # Save
-  saveRDS(fact_song, file = fact_path)
-  saveRDS(all_df, file = dim_path)
+  # Save locally and to S3
+  print("Saving Song Fact Table...")
+  save_rds_with_s3(song_df, fact_filename, local_dir = "./Data/")
   
-  # Print
-  print(paste0("Setlist Data Saved To ", fact_path))
-  print(paste0("Show Data Saved To ", dim_path))
+  print("Saving Show Dimension Table...")
+  save_rds_with_s3(all_df, dim_filename, local_dir = "./Data/")
+  
+  print("✓ Setlist data saved locally and backed up to S3")
 }
 save_setlists()
 

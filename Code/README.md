@@ -135,8 +135,67 @@ Failed scrapes are logged but don't crash the pipeline.
 - No need to re-scrape when switching machines
 - Automatic backup of all data files
 
-## Phase 3 Plans
+### Modeling Modules (Phase 3 Refactor)
 
-- Extract model training into `model.R`
-- Separate prediction generation from table formatting
-- Add model versioning and caching
+#### `features.R`
+Feature engineering for setlist prediction.
+
+**Key Functions:**
+- `prep_model_input()` - Prepare show/song data for modeling
+- `create_features_for_show()` - Engineer features for a single show prediction
+- `create_train_set()` - Build training dataset from historical shows
+
+**Features:**
+- Song frequency metrics (all-time, by era, by location, by day)
+- Last-time-played (LTP) calculations
+- Run-based metrics
+- Overdue scores
+
+#### `model.R`
+XGBoost model lifecycle management.
+
+**Key Functions:**
+- `train_model()` - Train XGBoost with optional SMOTE resampling
+- `save_model()` - Save to local + S3 with metadata
+- `load_model()` - Load from local or S3 fallback
+- `apply_model()` - Generate predictions
+- `get_or_train_model()` - Smart caching (load if exists, train if needed)
+
+**Features:**
+- Model versioning with timestamps
+- Metadata tracking (trained_on, metrics, feature_cols)
+- Automatic S3 backup
+- Performance metrics (accuracy, AUC, log loss)
+
+#### `predict.R`
+High-level prediction orchestration.
+
+**Key Functions:**
+- `predict_show()` - Generate predictions for a single show
+- `predict_multiple_shows()` - Batch predictions
+- `predict_next_show()` - Quick prediction for next upcoming show
+
+**Usage:**
+```r
+source('./Code/predict.R')
+
+# Predict next upcoming show
+predictions <- predict_next_show()
+
+# Predict specific show
+predictions <- predict_show("2025-06-27")  # Red Rocks N1
+
+# Batch predict multiple shows
+preds <- predict_multiple_shows(c("2025-06-27", "2025-06-28", "2025-06-29"))
+```
+
+**Smart Caching:**
+- Loads trained model from cache (local or S3)
+- Reuses data across multiple predictions
+- Only retrain when forced or no cached model exists
+
+## Phase 4 Plans
+
+- GitHub Actions for automated data updates
+- Scheduled model retraining
+- Automated prediction generation for upcoming shows

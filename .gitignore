@@ -14,5 +14,8 @@ Data/*.rds
 Data/*.csv
 cache/
 
+# HTML scraping cache
+cache/html/
+
 # Logs
 *.log

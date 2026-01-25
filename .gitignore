@@ -17,5 +17,13 @@ cache/
 # HTML scraping cache
 cache/html/
 
+# Trained models
+models/
+*.model
+
+# R project files
+*.Rproj
+.Rproj.user
+
 # Logs
 *.log

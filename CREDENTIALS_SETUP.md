@@ -15,7 +15,7 @@
    ```
    AWS_ACCESS_KEY_ID=your_access_key_here
    AWS_SECRET_ACCESS_KEY=your_secret_key_here
-   AWS_DEFAULT_REGION=us-east-1
+   AWS_DEFAULT_REGION=us-east-2
    AWS_S3_BUCKET=wsmfp-setlists
    ```
 
@@ -28,7 +28,7 @@ Set environment variables in your shell profile (`~/.zshrc` or `~/.bash_profile`
 ```bash
 export AWS_ACCESS_KEY_ID="your_access_key_here"
 export AWS_SECRET_ACCESS_KEY="your_secret_key_here"
-export AWS_DEFAULT_REGION="us-east-1"
+export AWS_DEFAULT_REGION="us-east-2"
 export AWS_S3_BUCKET="wsmfp-setlists"
 ```
 

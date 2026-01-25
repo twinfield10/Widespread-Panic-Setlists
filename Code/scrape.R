@@ -4,39 +4,67 @@
 library(rvest)
 library(httr)
 
-#' Safely fetch HTML from a URL with retry logic
+
+#' Playwright wrapper
+#' 
+#' @param url URL to fetch
+fetch_html_playwright <- function(url) {
+  cmd <- sprintf(
+    "python3 Code/fetch_page.py %s",
+    shQuote(url)
+  )
+  
+  html_text <- system(cmd, intern = TRUE)
+  html <- read_html(paste(html_text, collapse = "\n"))
+
+  return(html)
+}
+
+#' Safely fetch HTML from a URL using Playwright only
 #'
 #' @param url URL to fetch
 #' @param max_retries Maximum number of retry attempts
 #' @param retry_delay Delay between retries in seconds
 #' @return HTML document or NULL on failure
-safe_fetch_html <- function(url, max_retries = 3, retry_delay = 2) {
-  for (attempt in 1:max_retries) {
+safe_fetch_html <- function(
+  url,
+  max_retries = 3,
+  retry_delay = 2
+) {
+  for (attempt in seq_len(max_retries)) {
     tryCatch({
-      # Add user agent to avoid blocking
-      response <- httr::GET(
-        url,
-        httr::user_agent("WSP-Setlist-Analysis/1.0"),
-        httr::timeout(30)
-      )
-      
-      if (httr::status_code(response) == 200) {
-        html_doc <- read_html(httr::content(response, as = "text", encoding = "latin1"))
-        return(html_doc)
-      } else {
-        warning(paste0("HTTP ", httr::status_code(response), " for ", url))
+      message("Playwright attempt ", attempt, " for ", url)
+
+      html_doc <- fetch_html_playwright(url)
+
+      # Sanity check: make sure we actually got HTML
+      if (!inherits(html_doc, "xml_document")) {
+        stop("Playwright did not return a valid HTML document")
       }
+
+      return(html_doc)
+
     }, error = function(e) {
       if (attempt < max_retries) {
-        message(paste0("Attempt ", attempt, " failed for ", url, ". Retrying in ", retry_delay, "s..."))
+        message(
+          "Attempt ", attempt, " failed for ", url, ": ",
+          e$message,
+          ". Retrying in ", retry_delay, "s..."
+        )
         Sys.sleep(retry_delay)
       } else {
-        warning(paste0("Failed to fetch ", url, " after ", max_retries, " attempts: ", e$message))
+        warning(
+          "Playwright failed for ", url,
+          " after ", max_retries, " attempts: ",
+          e$message
+        )
       }
     })
   }
-  return(NULL)
+
+  NULL
 }
+
 
 #' Cache HTML to local file
 #'

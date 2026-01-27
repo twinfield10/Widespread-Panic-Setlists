@@ -4,15 +4,8 @@
 library(tidyverse)
 
 # Load modular pipeline
-source('./Code/data_pipeline.R')
+#source('./Code/data_pipeline.R')
 source('./Code/predict.R')
-
-###############################################################################
-# WORKFLOW 0: Load + Save Data
-###############################################################################
-wsp_list <- load_all_data(use_cache = FALSE)
-save_setlists()
-# wsp_list <- update_all_data()
 
 
 ###############################################################################

@@ -40,8 +40,9 @@ prep_model_input <- function(dim_df, song_df) {
   
   # Join songs with show data
   model_data <- model_dim %>%
-    inner_join(song_df, by = c('link')) %>%
-    filter(!is.na(date)) %>%
+    filter(!is.na(date), !is.na(link)) %>%
+    inner_join(song_df, by = c('link'), relationship = "many-to-many") %>%
+    distinct() %>%
     group_by(song_name) %>%
     mutate(
       ftp_date = min(date),

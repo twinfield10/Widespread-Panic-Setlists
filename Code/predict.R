@@ -21,8 +21,8 @@ predict_show <- function(show_date, data_list = NULL, model = NULL, force_retrai
     message("Loading setlist data...")
     
     # Try to load from local/S3
-    dim_all <- load_rds_with_s3('WSP_Show_Dim_Table_1986_to_2025.rds', local_dir = "./Data/")
-    fact_song <- load_rds_with_s3('WSP_Song_Fact_Table_1986_to_2025.rds', local_dir = "./Data/")
+    dim_all <- load_rds_with_s3('WSP_Show_Dim_Table_1986_to_2026.rds', local_dir = "./Data/")
+    fact_song <- load_rds_with_s3('WSP_Song_Fact_Table_1986_to_2026.rds', local_dir = "./Data/")
     
     if (is.null(dim_all) || is.null(fact_song)) {
       stop("Could not load data. Run load_all_data() first.")
@@ -44,9 +44,15 @@ predict_show <- function(show_date, data_list = NULL, model = NULL, force_retrai
       })
     } else {
       message("Training new model...")
-      # NOTE: This requires create_train_set to be fully implemented in features.R
-      # For now, this is a placeholder
-      stop("Model training requires fully implemented create_train_set(). Use existing trained model or implement training pipeline.")
+      # Create training set from last 100 shows
+      train_data <- create_train_set(
+        end_date = max(data_list$model_data$date),
+        train_n = 100,
+        model_data = data_list$model_data,
+        dim_future = data_list$dim_future
+      )
+      model <- train_model(train_data, resample = TRUE)
+      save_model(model)
     }
   }
   
@@ -75,8 +81,8 @@ predict_multiple_shows <- function(show_dates, data_list = NULL, model = NULL) {
   # Load data once
   if (is.null(data_list)) {
     message("Loading setlist data...")
-    dim_all <- load_rds_with_s3('WSP_Show_Dim_Table_1986_to_2025.rds', local_dir = "./Data/")
-    fact_song <- load_rds_with_s3('WSP_Song_Fact_Table_1986_to_2025.rds', local_dir = "./Data/")
+    dim_all <- load_rds_with_s3('WSP_Show_Dim_Table_1986_to_2026.rds', local_dir = "./Data/")
+    fact_song <- load_rds_with_s3('WSP_Song_Fact_Table_1986_to_2026.rds', local_dir = "./Data/")
     
     if (is.null(dim_all) || is.null(fact_song)) {
       stop("Could not load data. Run load_all_data() first.")
@@ -109,7 +115,7 @@ predict_multiple_shows <- function(show_dates, data_list = NULL, model = NULL) {
 predict_next_show <- function(model = NULL) {
   
   # Load future shows
-  dim_all <- load_rds_with_s3('WSP_Show_Dim_Table_1986_to_2025.rds', local_dir = "./Data/")
+  dim_all <- load_rds_with_s3('WSP_Show_Dim_Table_1986_to_2026.rds', local_dir = "./Data/")
   
   future_shows <- dim_all %>% 
     filter(is_fut == 1, date >= Sys.Date()) %>%
@@ -124,7 +130,7 @@ predict_next_show <- function(model = NULL) {
   
   message(paste0("Predicting for next show: ", next_show_date, " @ ", next_show_venue))
   
-  predictions <- predict_show(next_show_date, model = model)
+  predictions <- predict_show(next_show_date, model = model, force_retrain = FALSE)
   
   return(predictions)
 }

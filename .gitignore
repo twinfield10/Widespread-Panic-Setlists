@@ -27,3 +27,6 @@ models/
 
 # Logs
 *.log
+
+# Claude Data
+*.claude
